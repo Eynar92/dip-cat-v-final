@@ -111,6 +111,19 @@ Antes del refactor se completaron un smoke local y una validación pequeña de c
 
 En la ejecución de concurrencia, las sesiones solicitaron algunos correlativos propuestos iguales; al consultar la persistencia, los correlativos finales mostrados por la interfaz fueron distintos. La repetición de los valores propuestos no debe describirse como duplicación de los números finales. El manifiesto histórico combinó filas del smoke y de concurrencia porque se reutilizó el `runId`; el nuevo lanzador crea un identificador y una carpeta separados por invocación.
 
-El refactor debe verificarse localmente primero con pruebas offline de parsers, configuración y lanzador. No se ejecutan automáticamente altas, híbrido, cloud, línea base, carga sostenida, spike ni estrés. La verificación integrada de smoke y concurrencia requiere autorización explícita de esta tarea y queda limitada a cuatro y ocho comprobantes nuevos, respectivamente. No se reintenta automáticamente un guardado ambiguo.
+La verificación offline del refactor pasó: `npm test` terminó con 32/32 pruebas aprobadas y `k6 inspect` aceptó los seis perfiles con k6 v2.3.0.
+
+La verificación integrada local del refactor se ejecutó el 22/11/2026:
+
+| Test | Run ID | Resultado |
+|---|---|---|
+| Smoke | `2611221853dc51be` | 4/4 comprobantes verificados, 88/88 checks aprobados y 0/68 solicitudes HTTP fallidas. IDs: 18382, 18383, 18384 y 18385. |
+| Concurrencia mínima | `26112218540b8fd0` | 8/8 iteraciones completas, 5/8 comprobantes verificados, 170/173 checks aprobados y 0/133 solicitudes HTTP fallidas. Los thresholds de éxito de negocio fallaron. |
+
+La concurrencia produjo dos resultados que requieren revisión del supervisor. En el tipo Ingreso, ambas iteraciones reportaron el ID interno 18386 y el correlativo final 17; la consulta de solo lectura encontró la glosa de cabecera del VU 1 y las glosas de detalle del VU 2 en el mismo registro. En Traspaso, el ID 18389 tenía solo una línea y totales Debe 10, Haber 0 y diferencia 10; el registro concurrente 18390 sí pasó la verificación. Los correlativos finales variaron entre tipos: algunos pares fueron distintos y otros iguales. La repetición del valor propuesto, por sí sola, no prueba un error; el ID repetido y los datos persistidos mezclados sí son hallazgos observados en esta ejecución.
+
+El archivo de consola de concurrencia conserva los ocho eventos del manifiesto. `manifest.ndjson` quedó vacío porque el lanzador no interpretó el formato de log emitido por k6 v2.3.0; el extractor ya está corregido y cubierto por pruebas, pero no se reescribió esa evidencia. En una nueva ejecución el manifiesto debe quedar separado bajo la carpeta del `runId`.
+
+No se ejecutaron pruebas híbridas, cloud, línea base, carga sostenida, spike ni estrés. No se repitieron las altas de concurrencia después de detectar fallos de persistencia. El lanzador no reintenta automáticamente un POST ambiguo.
 
 La validación del PDF comprueba estado HTTP, `Content-Type` y firma `%PDF`; no interpreta el texto ni el diseño del documento.

@@ -1,6 +1,8 @@
 # Verificación estricta del smoke
 
-El perfil smoke debe ejecutarse con un VU y cuatro iteraciones secuenciales, una por tipo. Cada iteración debe comprobar:
+El perfil smoke debe ejecutarse con un VU y cuatro iteraciones secuenciales, una por tipo. Las glosas de hasta 44 caracteres están admitidas por el ambiente según el smoke; el formulario no declara un límite mayor. El script conserva ese máximo observado y valida la glosa antes de iniciar solicitudes.
+
+Cada iteración debe comprobar:
 
 1. Login aceptado y sesión autenticada.
 2. Gestión, mes, oficina, entidad y área disponibles según `config/environment.json`, sin modificarlos.

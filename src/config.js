@@ -9,7 +9,8 @@ export function loadConfig() {
   const environment = JSON.parse(open(`../config/${__ENV.ENVIRONMENT || "environment"}.json`));
   const baseUrl = (__ENV.FINANCIERO_BASE_URL || environment.baseUrl).replace(/\/$/, "");
   const mode = __ENV.EXECUTION_MODE || "local";
-  const runId = __ENV.RUN_ID || `${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(2, 12)}${Math.random().toString(36).slice(2, 8)}`;
+  const suffix = Math.random().toString(36).slice(2, 8).padEnd(6, "0");
+  const runId = __ENV.RUN_ID || `${new Date().toISOString().replace(/[-:TZ.]/g, "").slice(2, 12)}${suffix}`;
   required("FINANCIERO_USER", __ENV.FINANCIERO_USER);
   required("FINANCIERO_PASSWORD", __ENV.FINANCIERO_PASSWORD);
   if (!["local", "hybrid", "cloud"].includes(mode)) throw new Error("EXECUTION_MODE debe ser local, hybrid o cloud.");

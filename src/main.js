@@ -45,9 +45,14 @@ export function runVoucher() {
   const scenario = scenarioCode;
   const glosa = `DIP_Cato-G6-${cfg.runId}-${scenario}-V${vu}-I${iteration}`;
   let result;
-  try {
-    result = group(`comprobante:${label}`, () => createVoucher({ http, check, cfg, data, glosa, vu, iteration, scenario, recordOperation, businessSuccess }));
-  } catch (_) {
+  const glosaAllowed = check(glosa, { "glosa dentro del largo validado": (value) => value.length <= 44 });
+  if (glosaAllowed) {
+    try {
+      result = group(`comprobante:${label}`, () => createVoucher({ http, check, cfg, data, glosa, vu, iteration, scenario, recordOperation, businessSuccess }));
+    } catch (_) {
+      result = { ok: false };
+    }
+  } else {
     result = { ok: false };
   }
   businessSuccess.add(!!(result && result.ok), { voucher_type: String(type) });

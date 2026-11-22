@@ -15,6 +15,16 @@ const scenarioCode = scenarioCodes[__ENV.LOAD_PROFILE || "smoke"];
 const profile = JSON.parse(open(`../profiles/${__ENV.LOAD_PROFILE || "smoke"}.json`));
 const thresholds = JSON.parse(open(`../thresholds/${__ENV.THRESHOLD_PROFILE || "smoke"}.json`));
 
+for (const type of selected) {
+  const data = vouchers.find((voucher) => voucher.type === type);
+  if (!data || data.lines.length !== 2 || data.lines.some((line) => !line.accountNumber || line.debit < 0 || line.credit < 0)) {
+    throw new Error(`Plantilla incompleta para el tipo ${type}.`);
+  }
+  const debit = data.lines.reduce((total, line) => total + line.debit, 0);
+  const credit = data.lines.reduce((total, line) => total + line.credit, 0);
+  if (debit !== credit) throw new Error(`La plantilla del tipo ${type} no está balanceada.`);
+}
+
 export const options = {
   scenarios: { comprobantes: profile.stages
     ? { executor: "ramping-vus", stages: profile.stages, gracefulRampDown: "30s", exec: "runVoucher" }

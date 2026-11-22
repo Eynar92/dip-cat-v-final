@@ -1,23 +1,21 @@
 import http from "k6/http";
-import { check, group } from "k6";
+import { check, group, sleep } from "k6";
 import { SharedArray } from "k6/data";
 import execution from "k6/execution";
 import { loadConfig } from "./config.js";
+import { buildScenario } from "../config/test-config.js";
 import { flowFailureRate, recordOperation, businessSuccess } from "./metrics.js";
 import { createVoucher } from "./voucher-flow.js";
-import { sleep } from "k6";
 
 const cfg = loadConfig();
+const test = cfg.testConfig;
 const vouchers = new SharedArray("datos comprobantes", () => JSON.parse(open("../data/vouchers.json")));
-const selected = __ENV.VOUCHER_TYPES ? __ENV.VOUCHER_TYPES.split(",").map(Number) : [1, 2, 3, 4];
-const scenarioCodes = { smoke: "SM", "concurrency-validation": "CV", baseline: "BL", sustained: "SU", spike: "SP", stress: "ST" };
-const scenarioCode = scenarioCodes[__ENV.LOAD_PROFILE || "smoke"];
-const profile = JSON.parse(open(`../profiles/${__ENV.LOAD_PROFILE || "smoke"}.json`));
-const thresholds = JSON.parse(open(`../thresholds/${__ENV.THRESHOLD_PROFILE || "smoke"}.json`));
+const scenarioOptions = buildScenario(test);
 
-for (const type of selected) {
+for (const type of test.types) {
   const data = vouchers.find((voucher) => voucher.type === type);
-  if (!data || data.lines.length !== 2 || data.lines.some((line) => !line.accountNumber || line.debit < 0 || line.credit < 0)) {
+  if (!data || !Array.isArray(data.lines) || data.lines.length !== 2 ||
+      data.lines.some((line) => !line.accountNumber || !Number.isFinite(line.debit) || !Number.isFinite(line.credit) || line.debit < 0 || line.credit < 0)) {
     throw new Error(`Plantilla incompleta para el tipo ${type}.`);
   }
   const debit = data.lines.reduce((total, line) => total + line.debit, 0);
@@ -26,36 +24,60 @@ for (const type of selected) {
 }
 
 export const options = {
-  scenarios: { comprobantes: profile.stages
-    ? { executor: "ramping-vus", stages: profile.stages, gracefulRampDown: "30s", exec: "runVoucher" }
-    : profile.duration
-      ? { executor: "constant-vus", vus: profile.vus || 1, duration: profile.duration, exec: "runVoucher" }
-      : { executor: "per-vu-iterations", vus: profile.vus || 1, iterations: profile.iterations || selected.length,
-          maxDuration: profile.maxDuration || "10m", exec: "runVoucher" } },
-  thresholds,
+  scenarios: { comprobantes: scenarioOptions },
+  thresholds: test.thresholds,
   userAgent: "dip-cat-v-final/k6",
 };
 
+function errorMessage(error) {
+  if (error && typeof error.message === "string") return error.message.slice(0, 500);
+  return String(error || "Error sin detalle.").slice(0, 500);
+}
+
 export function runVoucher() {
-  const type = selected[execution.scenario.iterationInTest % selected.length];
+  const iterationIndex = execution.vu.iterationInScenario;
+  const type = test.types[iterationIndex % test.types.length];
   const data = vouchers.find((voucher) => voucher.type === type);
-  const label = `${data.name}`;
   const vu = execution.vu.idInTest;
-  const iteration = execution.vu.iterationInScenario + 1;
-  const scenario = scenarioCode;
-  const glosa = `DIP_Cato-G6-${cfg.runId}-${scenario}-V${vu}-I${iteration}`;
-  let result;
+  const iteration = iterationIndex + 1;
+  const glosa = `DIP_Cato-G6-${cfg.runId}-${test.scenarioCode}-V${vu}-I${iteration}`;
+  const metadata = {
+    runId: cfg.runId,
+    test: cfg.testName,
+    mode: cfg.mode,
+    scenario: test.scenarioCode,
+    type,
+    vu,
+    iteration,
+    glosa,
+  };
+
+  let result = { ok: false, event: { status: "failed", stage: "not-started", error: null } };
   const glosaAllowed = check(glosa, { "glosa dentro del largo validado": (value) => value.length <= 44 });
-  if (glosaAllowed) {
-    try {
-      result = group(`comprobante:${label}`, () => createVoucher({ http, check, cfg, data, glosa, vu, iteration, scenario, recordOperation, businessSuccess }));
-    } catch (_) {
-      result = { ok: false };
-    }
+  if (!glosaAllowed) {
+    result.event = { status: "failed", stage: "glosa-validation", error: "La glosa supera los 44 caracteres validados." };
   } else {
-    result = { ok: false };
+    try {
+      result = group(`comprobante:${data.name}`, () => createVoucher({
+        http,
+        check,
+        cfg,
+        data,
+        glosa,
+        vu,
+        iteration,
+        scenario: test.scenarioCode,
+        recordOperation,
+        businessSuccess,
+      }));
+    } catch (error) {
+      result = { ok: false, event: { status: "failed", stage: "flow-exception", error: errorMessage(error) } };
+    }
   }
-  businessSuccess.add(!!(result && result.ok), { voucher_type: String(type) });
-  flowFailureRate.add(!(result && result.ok), { voucher_type: String(type) });
-  sleep(Number(__ENV.THINK_TIME_SECONDS || 3));
+
+  const event = { ...metadata, ...(result?.event || {}) };
+  console.log(`MANIFEST ${JSON.stringify(event)}`);
+  businessSuccess.add(!!result?.ok, { voucher_type: String(type) });
+  flowFailureRate.add(!result?.ok, { voucher_type: String(type) });
+  sleep(test.pauseSeconds);
 }

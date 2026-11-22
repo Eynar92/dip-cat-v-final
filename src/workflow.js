@@ -1,41 +1,71 @@
 import { recordOperation as defaultRecord } from "./metrics.js";
-import { parseFormDefaults } from "./voucher-parse.js";
+import { getAccountingModuleRequest, getRequest, postRequest } from "./http-client.js";
+import { parseFormDefaults, validateNumberingContext } from "./voucher-parse.js";
 
-export function authenticate({ http, check, cfg, recordOperation = defaultRecord }, session) {
-  let response = http.get(`${cfg.baseUrl}/login.html`, { jar: session.jar, tags: { operation: "login", voucher_type: "none" } });
-  recordOperation(response, "login_form", 0);
-  if (!check(response, { "formulario de acceso disponible": (r) => r.status === 200 })) return false;
-  response = http.post(`${cfg.baseUrl}/session.php`, { user: cfg.user, password: cfg.password }, {
-    jar: session.jar, redirects: 0, headers: { "Content-Type": "application/x-www-form-urlencoded" }, tags: { operation: "login_submit", voucher_type: "none" },
-  });
-  recordOperation(response, "login_submit", 0);
-  const accepted = check(response, { "autenticación aceptada": (r) => [302, 303].includes(r.status) });
-  if (!accepted) return false;
-  response = http.get(`${cfg.baseUrl}/index.php`, { jar: session.jar, tags: { operation: "auth_check", voucher_type: "none" } });
-  return check(response, { "sesión autenticada": (r) => r.status === 200 && !r.body.includes("name=\"password\"") });
+function request(ctx, session, path, operation, type = null, options = {}) {
+  return getRequest({ ...ctx, session, path, operation, type, options,
+    recordOperation: ctx.recordOperation || defaultRecord });
 }
 
-export function getContext({ http, check, cfg, recordOperation = defaultRecord }, session) {
-  let response = http.get(`${cfg.baseUrl}/modulo.php?codigo=3`, { jar: session.jar, redirects: 0, tags: { operation: "context", voucher_type: "none" } });
-  recordOperation(response, "module", 0);
-  const moduleOk = check(response, { "módulo contable disponible": (r) => [302, 303].includes(r.status) });
-  if (!moduleOk) return { ok: false };
-  response = http.get(`${cfg.baseUrl}/index.php?opcion=homeModulo`, { jar: session.jar, tags: { operation: "context", voucher_type: "none" } });
-  recordOperation(response, "context", 0);
-  if (!check(response, { "contexto contable disponible": (r) => r.status === 200 })) return { ok: false };
-  const html = String(response.body);
-  // El listado expone la sesión y el formulario confirma entidad/oficina antes de crear.
-  const listing = http.get(`${cfg.baseUrl}/index.php?opcion=listComprobantes`, { jar: session.jar, tags: { operation: "context", voucher_type: "none" } });
-  recordOperation(listing, "listing", 0);
-  const register = http.get(`${cfg.baseUrl}/comprobantes/register.php`, { jar: session.jar, tags: { operation: "form", voucher_type: "none" } });
-  recordOperation(register, "form", 0);
-  const form = String(register.body);
-  const expected = cfg.expectedContext;
-  const defaults = parseFormDefaults(form);
-  const unitLabel = String(form).includes(expected.officeName) && String(form).includes(expected.areaName) && String(form).includes(expected.entityName);
-  const verified = register.status === 200 && listing.status === 200 && defaults.ok && unitLabel &&
-    Number(defaults.year) === expected.managementYear && Number(defaults.month) === expected.workMonth &&
-    defaults.unitName.includes(expected.officeName);
-  return { ok: check({ ok: verified, status: register.status }, { "contexto disponible sin cambiar parámetros": (r) => r.ok }),
-    year: defaults.year, month: defaults.month, html: form };
+function isSuccessful(check, response, name, predicate) {
+  return check(response, { [name]: predicate });
+}
+
+export function authenticate(ctx, session) {
+  const { check, cfg } = ctx;
+  let response = request(ctx, session, "login.html", "login_form");
+  if (!isSuccessful(check, response, "formulario de acceso disponible", (value) => value.status === 200)) {
+    return { ok: false, stage: "login-form", reason: "El formulario de acceso no respondió correctamente." };
+  }
+
+  response = postRequest({ ...ctx, session, path: "session.php", body: { user: cfg.user, password: cfg.password },
+    operation: "login_submit", type: null, recordOperation: ctx.recordOperation || defaultRecord,
+    options: { redirects: 0, headers: { "Content-Type": "application/x-www-form-urlencoded" } } });
+  if (!isSuccessful(check, response, "autenticación aceptada", (value) => [302, 303].includes(value.status))) {
+    return { ok: false, stage: "authentication", reason: "El ambiente rechazó la autenticación." };
+  }
+
+  response = request(ctx, session, "index.php", "auth_check");
+  const authenticated = isSuccessful(check, response, "sesión autenticada",
+    (value) => value.status === 200 && !String(value.body).includes('name="password"'));
+  return authenticated ? { ok: true } : { ok: false, stage: "authentication", reason: "La sesión no quedó autenticada." };
+}
+
+export function getContext(ctx, session) {
+  const { check, cfg } = ctx;
+  let response = getAccountingModuleRequest({ ...ctx, recordOperation: ctx.recordOperation || defaultRecord }, session);
+  if (!isSuccessful(check, response, "módulo contable disponible", (value) => [302, 303].includes(value.status))) {
+    return { ok: false, stage: "accounting-module", reason: "No se pudo abrir el módulo contable." };
+  }
+
+  response = request(ctx, session, "index.php?opcion=homeModulo", "context");
+  if (!isSuccessful(check, response, "contexto contable disponible", (value) => value.status === 200)) {
+    return { ok: false, stage: "accounting-context", reason: "No se pudo cargar el contexto contable." };
+  }
+
+  const listing = request(ctx, session, "index.php?opcion=listComprobantes", "listing");
+  if (!isSuccessful(check, listing, "listado de comprobantes disponible", (value) => value.status === 200)) {
+    return { ok: false, stage: "voucher-list", reason: "No se pudo cargar el listado de comprobantes." };
+  }
+
+  const register = request(ctx, session, "comprobantes/register.php", "form");
+  if (!isSuccessful(check, register, "formulario de comprobante disponible", (value) => value.status === 200)) {
+    return { ok: false, stage: "voucher-form", reason: "No se pudo abrir el formulario de comprobantes." };
+  }
+
+  const defaults = parseFormDefaults(register.body);
+  const contextCheck = validateNumberingContext(defaults, cfg.expectedContext);
+  const contextOk = check({ ok: contextCheck.ok }, {
+    "contexto activo coincide con la configuración": (value) => value.ok,
+  });
+  if (!contextOk) {
+    return { ok: false, stage: "context-validation", reason: contextCheck.reason, defaults };
+  }
+  return { ok: true, defaults, html: String(register.body), numberingContext: {
+    managementYear: defaults.year,
+    workMonth: defaults.month,
+    entityCode: defaults.entity,
+    officeCode: defaults.office,
+    areaCode: defaults.area || null,
+  } };
 }

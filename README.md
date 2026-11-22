@@ -21,6 +21,8 @@ En `.env`, reemplazar `FINANCIERO_USER`, `FINANCIERO_PASSWORD`, `FINANCIERO_BASE
 
 `FINANCIERO_USER` y `FINANCIERO_PASSWORD` son obligatorios en las tres modalidades. `K6_CLOUD_TOKEN` y `K6_CLOUD_STACK_ID` son obligatorios para híbrida y cloud. Se pueden definir en el entorno del proceso en vez de `.env`; el lanzador carga `.env` explícitamente cuando existe.
 
+Antes de ejecutar, revisar `config/environment.json` para confirmar que la URL y el contexto esperado coinciden con el ambiente habilitado. El script detiene el flujo si encuentra otra gestión, mes, entidad u oficina; esos valores no se cambian para forzar la prueba. En `data/vouchers.json` se pueden ajustar cuentas e importes solo después de verificarlos con el grupo. Los valores de `profiles/` y los criterios de negocio de `thresholds/` también deben revisarse antes de una ejecución formal.
+
 ## Estructura
 
 - `config/`: URL y contexto que se espera encontrar en la sesión.

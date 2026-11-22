@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { getRequest, postRequest } from "../src/http-client.js";
+import { getAccountingModuleRequest, getRequest, postRequest } from "../src/http-client.js";
 import { parseFormDefaults, validateNumberingContext } from "../src/voucher-parse.js";
 
 const expectedContext = {
@@ -76,4 +76,23 @@ test("usa nombres de petición estables aunque cambie el ID de la URL", () => {
     "persistence_redirect", "persistence_redirect", "save",
   ]);
   assert.ok(requests.every(({ options }) => options.timeout === "30s"));
+});
+
+test("conserva el 302 original del módulo contable", () => {
+  let captured;
+  const response = getAccountingModuleRequest({
+    http: {
+      get(url, options) {
+        captured = { url, options };
+        return { status: options.redirects === 0 ? 302 : 200, timings: { duration: 1 } };
+      },
+    },
+    cfg: { baseUrl: "https://example.test/app", requestTimeout: "30s" },
+    recordOperation() {},
+  }, { jar: {} });
+
+  assert.match(captured.url, /modulo\.php\?codigo=3$/);
+  assert.equal(captured.options.redirects, 0);
+  assert.equal(captured.options.tags.name, "module");
+  assert.equal(response.status, 302);
 });

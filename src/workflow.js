@@ -1,5 +1,5 @@
 import { recordOperation as defaultRecord } from "./metrics.js";
-import { getRequest, postRequest } from "./http-client.js";
+import { getAccountingModuleRequest, getRequest, postRequest } from "./http-client.js";
 import { parseFormDefaults, validateNumberingContext } from "./voucher-parse.js";
 
 function request(ctx, session, path, operation, type = null, options = {}) {
@@ -33,7 +33,7 @@ export function authenticate(ctx, session) {
 
 export function getContext(ctx, session) {
   const { check, cfg } = ctx;
-  let response = request(ctx, session, "modulo.php?codigo=3", "module");
+  let response = getAccountingModuleRequest({ ...ctx, recordOperation: ctx.recordOperation || defaultRecord }, session);
   if (!isSuccessful(check, response, "módulo contable disponible", (value) => [302, 303].includes(value.status))) {
     return { ok: false, stage: "accounting-module", reason: "No se pudo abrir el módulo contable." };
   }

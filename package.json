@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test",
+    "test": "node --test tests/*.test.js",
     "test:local": "node run.js --mode local",
     "test:hybrid": "node run.js --mode hybrid",
     "test:cloud": "node run.js --mode cloud"

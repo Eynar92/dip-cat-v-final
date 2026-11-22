@@ -122,7 +122,7 @@ La verificación integrada local del refactor se ejecutó el 22/11/2026:
 
 La concurrencia produjo dos resultados que requieren revisión del supervisor. En el tipo Ingreso, ambas iteraciones reportaron el ID interno 18386 y el correlativo final 17; la consulta de solo lectura encontró la glosa de cabecera del VU 1 y las glosas de detalle del VU 2 en el mismo registro. En Traspaso, el ID 18389 tenía solo una línea y totales Debe 10, Haber 0 y diferencia 10; el registro concurrente 18390 sí pasó la verificación. Los correlativos finales variaron entre tipos: algunos pares fueron distintos y otros iguales. La repetición del valor propuesto, por sí sola, no prueba un error; el ID repetido y los datos persistidos mezclados sí son hallazgos observados en esta ejecución.
 
-El archivo de consola de concurrencia conserva los ocho eventos del manifiesto. `manifest.ndjson` quedó vacío porque el lanzador no interpretó el formato de log emitido por k6 v2.3.0; el extractor ya está corregido y cubierto por pruebas, pero no se reescribió esa evidencia. En una nueva ejecución el manifiesto debe quedar separado bajo la carpeta del `runId`.
+Los logs de consola conservan los cuatro y ocho eventos emitidos por k6. Los dos archivos `manifest.ndjson` quedaron vacíos porque el lanzador no interpretó el formato de log emitido por k6 v2.3.0; el extractor ya está corregido y cubierto por pruebas, pero no se reescribieron esas evidencias. En una nueva ejecución el manifiesto debe quedar separado bajo la carpeta del `runId`.
 
 No se ejecutaron pruebas híbridas, cloud, línea base, carga sostenida, spike ni estrés. No se repitieron las altas de concurrencia después de detectar fallos de persistencia. El lanzador no reintenta automáticamente un POST ambiguo.
 

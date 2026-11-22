@@ -39,13 +39,15 @@ export function resolveAccount(html, expected) {
   return null;
 }
 
-export function verifyPersistedVoucher({ http, check, cfg, session, data, id, glosa, date, accounts }) {
+export function verifyPersistedVoucher({ http, check, cfg, session, data, id, glosa, date, accounts, recordOperation }) {
   const options = { jar: session.jar, tags: { operation: "persistence", voucher_type: String(data.type) } };
   let response = http.get(`${cfg.baseUrl}/comprobantes/editar.php?codigo=${id}`, { ...options, redirects: 0 });
-  const redirect = String(response.body).match(/(?:window\.location|location\.href)\s*=\s*["']([^"']*edit_prueba\.php[^"']*)/i)?.[1];
+  check(response, { "edición devuelve la consulta de detalle": (r) => r.status === 200 && String(r.body).includes("edit_prueba.php") });
   const detailUrl = `${cfg.baseUrl}/comprobantes/edit_prueba.php?codigo=${id}`;
-  void redirect;
+  recordOperation(response, "persistence_redirect", data.type);
+  // k6 no ejecuta el cambio de página del HTML; consulta el detalle de forma explícita.
   response = http.get(detailUrl, options);
+  recordOperation(response, "persistence_detail", data.type);
   const html = String(response.body);
   const rowCalls = [...html.matchAll(/setBusquedaCuentaEdit\(([^)]*)\)/gi)].map((match) => match[1]);
   const selector = html.match(/<select\b[^>]*\bname=["']tipo_comprobante["'][^>]*>([\s\S]*?)<\/select>/i)?.[1] || "";
@@ -62,6 +64,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
     Number(inputValue(html, "totaldeb")) === totalDebit && Number(inputValue(html, "totalhab")) === totalCredit;
   check({ ok: verified, status: response.status }, { "persistencia coincide con el comprobante": (r) => r.ok });
   const print = http.get(`${cfg.baseUrl}/comprobantes/imp.php?comp=${id}&mon=1`, options);
+  recordOperation(print, "pdf", data.type);
   const pdfOk = print.status === 200 && String(print.headers["Content-Type"] || "").toLowerCase().includes("application/pdf") &&
     String(print.body).startsWith("%PDF");
   check({ ok: pdfOk, status: print.status }, { "PDF descargado con firma válida": (r) => r.ok });

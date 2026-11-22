@@ -37,7 +37,7 @@ export const options = {
 };
 
 export function runVoucher() {
-  const type = selected[execution.scenario.iterationInTest % selected.length];
+  const type = selected[execution.vu.iterationInScenario % selected.length];
   const data = vouchers.find((voucher) => voucher.type === type);
   const label = `${data.name}`;
   const vu = execution.vu.idInTest;

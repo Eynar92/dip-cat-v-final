@@ -1,6 +1,6 @@
 import { recordOperation as defaultRecord } from "./metrics.js";
 import { getRequest, postRequest } from "./http-client.js";
-import { parseLineContext, parseFormDefaults, parsePersistedVoucher, resolveAccount } from "./voucher-parse.js";
+import { parseLineContext, parseFormDefaults, parsePersistedVoucher, resolveAccount, validateLineContext } from "./voucher-parse.js";
 
 function requestContext(ctx, session, operation, type, path) {
   return { http: ctx.http, cfg: ctx.cfg, session, path, operation, type,
@@ -39,8 +39,7 @@ function dateMatchesContext(date, expectedContext) {
 }
 
 function selectedContextIsValid(lineContext, expectedContext) {
-  return lineContext.ok && String(lineContext.unit) === String(expectedContext.officeCode) &&
-    String(lineContext.area) === String(expectedContext.areaCode);
+  return validateLineContext(lineContext, expectedContext);
 }
 
 function buildPayload({ defaults, data, accounts, glosa, correlative, date }) {
@@ -181,9 +180,9 @@ export function requestVoucher(ctx, session, context, event) {
       return failure("account-options", `No se pudo cargar la línea ${row} del detalle.`, { correlativeProposed });
     }
     const lineContext = parseLineContext(response.body, row);
-    const activeContextOk = selectedContextIsValid(lineContext, cfg.expectedContext);
-    if (!check({ ok: activeContextOk }, { [`contexto activo de la línea ${row}`]: (value) => value.ok })) {
-      return failure("line-context", `La unidad o área activa de la línea ${row} no coincide con el contexto esperado.`, { correlativeProposed });
+    const activeContext = selectedContextIsValid(lineContext, cfg.expectedContext);
+    if (!check({ ok: activeContext.ok }, { [`contexto activo de la línea ${row}`]: (value) => value.ok })) {
+      return failure("line-context", activeContext.reason, { correlativeProposed });
     }
 
     const line = data.lines[index];

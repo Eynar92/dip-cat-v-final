@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { getAccountingModuleRequest, getRequest, postRequest } from "../src/http-client.js";
-import { parseFormDefaults, validateNumberingContext } from "../src/voucher-parse.js";
+import { parseFormDefaults, parseLineContext, validateLineContext, validateNumberingContext } from "../src/voucher-parse.js";
 
 const expectedContext = {
   managementYear: 2026,
@@ -14,41 +14,80 @@ const expectedContext = {
   areaName: "ADM CETOF",
 };
 
-function formWithArea(areaSelect) {
-  return `<input name="global_gestion" value="2026">
+function registerForm() {
+  return `<input type="hidden" id="cod_entidad_comprobante" value="2">
+    <input type="hidden" id="cod_unidad_comprobante" value="1">
+    <input name="global_gestion" value="2026">
     <input name="global_mes" value="9">
     <input name="fecha" value="2026-09-01">
-    <select name="codEntidadComprobante"><option value="2" selected>CETOF</option></select>
-    <select name="codUnidadComprobante"><option value="1" selected>ADM CETOF</option></select>
-    ${areaSelect}`;
+    <input name="unidad_organizacional" value="ADM CETOF - ADM CETOF">`;
 }
 
-test("rechaza el contexto si el área esperada no está presente", () => {
-  const defaults = parseFormDefaults(formWithArea(""));
+test("lee entidad y oficina de inputs con id y valida contexto global sin área", () => {
+  const defaults = parseFormDefaults(registerForm());
   const result = validateNumberingContext(defaults, expectedContext);
 
-  assert.equal(result.ok, false);
-  assert.match(result.reason, /área activa/i);
+  assert.equal(defaults.entity, "2");
+  assert.equal(defaults.entityName, "");
+  assert.equal(defaults.office, "1");
+  assert.equal(defaults.officeName, "ADM CETOF - ADM CETOF");
+  assert.equal(defaults.area, "");
+  assert.equal(result.ok, true);
 });
 
-test("valida el valor y el nombre del área activa, no una opción no seleccionada", () => {
-  const defaults = parseFormDefaults(formWithArea(`<select name="codAreaComprobante">
-    <option value="1">ADM CETOF</option>
-    <option value="2" selected>OTRA ÁREA</option>
-  </select>`));
-  const result = validateNumberingContext(defaults, expectedContext);
+test("valida unidad y área activas del fragmento de línea", () => {
+  const html = `<select name="unidad1"><option value="1" data-subtext="ADM CETOF">ADM CETOF</option></select>
+    <select name="area1"><option value="2">Otra</option><option value="1" selected>ADM CETOF</option></select>`;
+  const context = parseLineContext(html, 1);
 
-  assert.equal(defaults.area, "2");
-  assert.equal(result.ok, false);
+  assert.deepEqual(context, { unit: "1", unitName: "ADM CETOF", area: "1", areaName: "ADM CETOF", ok: true });
+  assert.equal(validateLineContext(context, expectedContext).ok, true);
+});
+
+test("rechaza una línea si falta el área activa aunque el contexto global sea válido", () => {
+  const defaults = parseFormDefaults(registerForm());
+  const context = parseLineContext(`<select name="unidad1"><option value="1" selected>ADM CETOF</option></select>`, 1);
+
+  assert.equal(validateNumberingContext(defaults, expectedContext).ok, true);
+  assert.equal(validateLineContext(context, expectedContext).ok, false);
+});
+
+test("rechaza código o nombre distinto en el área activa, aunque coincida una opción inactiva", () => {
+  const context = parseLineContext(`<select name="unidad1"><option value="1" selected>ADM CETOF</option></select>
+    <select name="area1"><option value="1">ADM CETOF</option><option value="2" selected>OTRA ÁREA</option>
+  </select>`, 1);
+
+  assert.equal(context.area, "2");
+  assert.equal(validateLineContext(context, expectedContext).ok, false);
+});
+
+test("rechaza el nombre activo de área incorrecto incluso si el código coincide", () => {
+  const context = parseLineContext(`<select name="unidad1"><option value="1" selected>ADM CETOF</option></select>
+    <select name="area1"><option value="1" selected>OTRA ÁREA</option></select>`, 1);
+
+  assert.equal(validateLineContext(context, expectedContext).ok, false);
+});
+
+test("rechaza el código de unidad activa que no coincide", () => {
+  const context = parseLineContext(`<select name="unidad1"><option value="2" selected>OTRA</option></select>
+    <select name="area1"><option value="1" selected>ADM CETOF</option></select>`, 1);
+
+  assert.equal(validateLineContext(context, expectedContext).ok, false);
 });
 
 test("acepta el área activa cuando coinciden código y nombre configurados", () => {
-  const defaults = parseFormDefaults(formWithArea(`<select name="codAreaComprobante">
-    <option value="2">OTRA ÁREA</option>
-    <option value="1" selected>ADM CETOF</option>
-  </select>`));
+  const context = parseLineContext(`<select name="unidad1"><option value="1" selected>ADM CETOF</option></select>
+    <select name="area1"><option value="1" selected>ADM CETOF</option></select>`, 1);
 
-  assert.equal(validateNumberingContext(defaults, expectedContext).ok, true);
+  assert.equal(validateLineContext(context, expectedContext).ok, true);
+});
+
+test("rechaza el contexto global si falta entidad u oficina activa", () => {
+  const defaults = parseFormDefaults(`<input name="global_gestion" value="2026">
+    <input name="global_mes" value="9"><input name="fecha" value="2026-09-01">`);
+  const result = validateNumberingContext(defaults, expectedContext);
+
+  assert.equal(result.ok, false);
 });
 
 test("usa nombres de petición estables aunque cambie el ID de la URL", () => {

@@ -14,9 +14,10 @@ function readAttribute(tag, name) {
   return { present: !!match, value: match ? (match[2] ?? match[3] ?? "") : "" };
 }
 
-function readControl(html, name) {
+function readControl(html, name, id = name) {
   const source = String(html);
-  const selectTag = findTag(source, "select", "name", name);
+  const namedSelect = findTag(source, "select", "name", name);
+  const selectTag = namedSelect || (id ? findTag(source, "select", "id", id) : "");
   if (selectTag) {
     const selectMatch = source.match(new RegExp(`(${selectTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?<\\/select>)`, "i"));
     const selectHtml = selectMatch?.[1] || "";
@@ -29,13 +30,15 @@ function readControl(html, name) {
     return { present: value.present, value: value.value, label };
   }
 
-  const inputTag = findTag(source, "input", "name", name);
+  const namedInput = findTag(source, "input", "name", name);
+  const inputTag = namedInput || (id ? findTag(source, "input", "id", id) : "");
   if (inputTag) {
     const value = readAttribute(inputTag, "value");
-    return { present: value.present, value: value.value, label: value.value };
+    return { present: value.present, value: value.value, label: namedInput ? value.value : "" };
   }
 
-  const textareaTag = findTag(source, "textarea", "name", name);
+  const namedTextarea = findTag(source, "textarea", "name", name);
+  const textareaTag = namedTextarea || (id ? findTag(source, "textarea", "id", id) : "");
   if (textareaTag) {
     const textarea = source.match(new RegExp(`(${textareaTag.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\s\\S]*?<\\/textarea>)`, "i"));
     const value = textarea?.[1]?.match(/^[^>]*>([\s\S]*?)<\/textarea>/i)?.[1]?.trim() || "";
@@ -44,9 +47,13 @@ function readControl(html, name) {
   return { present: false, value: "", label: "" };
 }
 
-function firstControl(html, names) {
+function firstControl(html, names, idAliases = []) {
   for (const name of names) {
     const control = readControl(html, name);
+    if (control.present) return control;
+  }
+  for (const id of idAliases) {
+    const control = readControl(html, "", id);
     if (control.present) return control;
   }
   return { present: false, value: "", label: "" };
@@ -125,8 +132,8 @@ function sameMoney(actualValue, expectedValue) {
 }
 
 export function parseFormDefaults(html) {
-  const entity = firstControl(html, ["codEntidadComprobante", "cod_entidad"]);
-  const office = firstControl(html, ["codUnidadComprobante", "cod_unidad"]);
+  const entity = firstControl(html, ["codEntidadComprobante", "cod_entidad"], ["cod_entidad_comprobante"]);
+  const office = firstControl(html, ["codUnidadComprobante", "cod_unidad"], ["cod_unidad_comprobante"]);
   const area = firstControl(html, ["codAreaComprobante", "cod_area"]);
   const year = firstControl(html, ["global_gestion", "gestion"]);
   const month = firstControl(html, ["global_mes", "mes"]);
@@ -138,7 +145,7 @@ export function parseFormDefaults(html) {
     entity: entity.value,
     entityName: entity.label,
     office: office.value,
-    officeName: office.label,
+    officeName: office.label || unitName.value,
     area: area.value,
     areaName: area.label,
     year: year.value,
@@ -166,17 +173,31 @@ export function validateNumberingContext(defaults, expected) {
     ["oficina", defaults.office, expected.officeCode],
   ];
   const areaIsExpected = expected.areaCode !== undefined && expected.areaCode !== null;
-  if (areaIsExpected && !defaults.area) return { ok: false, reason: "No se pudo leer el área activa del contexto." };
-  if (areaIsExpected) checks.push(["área", defaults.area, expected.areaCode]);
+  if (areaIsExpected && defaults.area) checks.push(["área", defaults.area, expected.areaCode]);
   const mismatch = checks.find(([, actual, configured]) => String(actual) !== String(configured));
   if (mismatch) return { ok: false, reason: `El valor activo de ${mismatch[0]} no coincide con la configuración.` };
   const namedChecks = [["entidad", defaults.entityName, expected.entityName], ["oficina", defaults.officeName, expected.officeName]]
-    .filter(([, , configured]) => configured !== undefined && configured !== null);
-  if (expected.areaName !== undefined && expected.areaName !== null) {
-    if (!defaults.areaName) return { ok: false, reason: "No se pudo leer el nombre del área activa." };
+    .filter(([, actual, configured]) => configured !== undefined && configured !== null && actual);
+  if (expected.areaName !== undefined && expected.areaName !== null && defaults.areaName) {
     namedChecks.push(["área", defaults.areaName, expected.areaName]);
   }
   const nameMismatch = namedChecks.find(([, actual, configured]) => !normalizedText(actual).includes(normalizedText(configured)));
+  return nameMismatch
+    ? { ok: false, reason: `El nombre activo de ${nameMismatch[0]} no coincide con la configuración.` }
+    : { ok: true };
+}
+
+export function validateLineContext(context, expected) {
+  if (!context?.ok || !expected) return { ok: false, reason: "No se pudieron leer los valores activos de unidad y área." };
+  const codeMismatch = String(context.unit) !== String(expected.officeCode)
+    ? "unidad" : String(context.area) !== String(expected.areaCode) ? "área" : null;
+  if (codeMismatch) return { ok: false, reason: `El valor activo de ${codeMismatch} no coincide con la configuración.` };
+
+  const names = [["unidad", context.unitName, expected.officeName], ["área", context.areaName, expected.areaName]]
+    .filter(([, , configured]) => configured !== undefined && configured !== null);
+  const missingName = names.find(([, actual]) => !actual);
+  if (missingName) return { ok: false, reason: `No se pudo leer el nombre activo de ${missingName[0]}.` };
+  const nameMismatch = names.find(([, actual, configured]) => !normalizedText(actual).includes(normalizedText(configured)));
   return nameMismatch
     ? { ok: false, reason: `El nombre activo de ${nameMismatch[0]} no coincide con la configuración.` }
     : { ok: true };

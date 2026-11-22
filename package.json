@@ -1,0 +1,12 @@
+{
+  "name": "dip-cat-v-final",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test",
+    "test:local": "node run.js --mode local",
+    "test:hybrid": "node run.js --mode hybrid",
+    "test:cloud": "node run.js --mode cloud"
+  }
+}

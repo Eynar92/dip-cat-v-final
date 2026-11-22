@@ -1,0 +1,5 @@
+{
+  "baseUrl": "http://srv1311911.hstgr.cloud/financierodiplomado/",
+  "expectedContext": {"managementYear": 2026,"workMonth": 9,"officeCode": 1,"officeName":"ADM CETOF","entityCode": 2,"entityName":"CETOF","areaCode": 1,"areaName":"ADM CETOF"},
+  "requestTimeout": "30s"
+}

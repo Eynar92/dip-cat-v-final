@@ -1,0 +1,1 @@
+{"http_req_failed":["rate==0"],"checks":["rate==1"],"voucher_business_success":["rate==1"],"voucher_flow_failure_rate":["rate==0"]}

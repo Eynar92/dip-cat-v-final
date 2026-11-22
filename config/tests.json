@@ -1,0 +1,110 @@
+{
+  "version": 1,
+  "tests": {
+    "smoke": {
+      "scenarioCode": "SM",
+      "types": [1, 2, 3, 4],
+      "executor": "per-vu-iterations",
+      "vus": 1,
+      "iterationsPerVu": 4,
+      "maxDuration": "10m",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "http_req_failed": ["rate==0"],
+        "checks": ["rate==1"],
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    },
+    "concurrency-validation": {
+      "scenarioCode": "CV",
+      "types": [1, 2, 3, 4],
+      "executor": "per-vu-iterations",
+      "vus": 2,
+      "iterationsPerVu": 4,
+      "maxDuration": "10m",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    },
+    "baseline": {
+      "scenarioCode": "BL",
+      "types": [1, 2, 3, 4],
+      "executor": "constant-vus",
+      "vus": 1,
+      "duration": "5m",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    },
+    "sustained": {
+      "scenarioCode": "SU",
+      "types": [1, 2, 3, 4],
+      "executor": "ramping-vus",
+      "stages": [
+        {"phase": "subida", "duration": "2m", "target": 1},
+        {"phase": "subida", "duration": "2m", "target": 5},
+        {"phase": "subida", "duration": "2m", "target": 10},
+        {"phase": "permanencia", "duration": "10m", "target": 10},
+        {"phase": "recuperacion", "duration": "2m", "target": 0}
+      ],
+      "gracefulRampDown": "30s",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    },
+    "spike": {
+      "scenarioCode": "SP",
+      "types": [1, 2, 3, 4],
+      "executor": "ramping-vus",
+      "stages": [
+        {"phase": "subida", "duration": "1m", "target": 5},
+        {"phase": "subida", "duration": "1m", "target": 20},
+        {"phase": "permanencia", "duration": "1m", "target": 20},
+        {"phase": "recuperacion", "duration": "5m", "target": 5}
+      ],
+      "gracefulRampDown": "30s",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    },
+    "stress": {
+      "scenarioCode": "ST",
+      "types": [1, 2, 3, 4],
+      "executor": "ramping-vus",
+      "stages": [
+        {"phase": "subida", "duration": "2m", "target": 5},
+        {"phase": "permanencia", "duration": "2m", "target": 5},
+        {"phase": "subida", "duration": "2m", "target": 10},
+        {"phase": "permanencia", "duration": "2m", "target": 10},
+        {"phase": "subida", "duration": "2m", "target": 20},
+        {"phase": "permanencia", "duration": "2m", "target": 20},
+        {"phase": "subida", "duration": "2m", "target": 30},
+        {"phase": "permanencia", "duration": "2m", "target": 30},
+        {"phase": "subida", "duration": "2m", "target": 40},
+        {"phase": "permanencia", "duration": "2m", "target": 40},
+        {"phase": "recuperacion", "duration": "2m", "target": 0}
+      ],
+      "gracefulRampDown": "30s",
+      "gracefulStop": "30s",
+      "pauseSeconds": 3,
+      "thresholds": {
+        "voucher_business_success": ["rate==1"],
+        "voucher_flow_failure_rate": ["rate==0"]
+      }
+    }
+  }
+}

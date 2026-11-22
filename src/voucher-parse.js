@@ -250,16 +250,22 @@ export function parsePersistedVoucher(html, expected) {
     const lineGlosa = readControl(source, `glosa_detalle${index + 1}`);
     const expectedId = String(accounts?.[index]?.id ?? "");
     const callbackTokens = rowCalls[index] || [];
+    const accountValid = !!expectedId && callbackTokens.some((token) => token === expectedId);
+    const glosaValid = lineGlosa.present && lineGlosa.value === glosa;
+    const debitValid = debit.present && sameMoney(debit.value, line.debit);
+    const creditValid = credit.present && sameMoney(credit.value, line.credit);
     return {
       index: index + 1,
       accountId: expectedId,
-      accountMatched: !!expectedId && callbackTokens.some((token) => token === expectedId),
+      accountMatched: accountValid,
       debit: debit.value,
       credit: credit.value,
       glosa: lineGlosa.value,
-      valid: debit.present && credit.present && lineGlosa.present &&
-        !!expectedId && callbackTokens.some((token) => token === expectedId) &&
-        sameMoney(debit.value, line.debit) && sameMoney(credit.value, line.credit) && lineGlosa.value === glosa,
+      accountValid,
+      glosaValid,
+      debitValid,
+      creditValid,
+      valid: accountValid && glosaValid && debitValid && creditValid,
     };
   });
   const expectedDebit = lines.reduce((sum, line) => sum + line.debit, 0);
@@ -270,12 +276,25 @@ export function parsePersistedVoucher(html, expected) {
     date: String(date ?? ""),
     glosa: String(glosa ?? ""),
   };
-  const valid = !!data && lines.length > 0 && rowCalls.length === lines.length &&
-    type === expectedContext.type && storedDate.present && storedDate.value === expectedContext.date &&
-    storedGlosa.present && storedGlosa.value === expectedContext.glosa && correlativeFinal !== null &&
-    totalDebit.present && totalCredit.present && sameMoney(totalDebit.value, expectedDebit) &&
-    sameMoney(totalCredit.value, expectedCredit) &&
-    (!totalDifference.present || sameMoney(totalDifference.value, 0)) && rows.every((row) => row.valid);
+  const issues = [];
+  if (!data || lines.length === 0) issues.push("plantilla de comprobante");
+  if (rowCalls.length !== lines.length) issues.push(`cantidad de filas (esperadas ${lines.length}, encontradas ${rowCalls.length})`);
+  if (type !== expectedContext.type) issues.push("tipo de comprobante");
+  if (!storedDate.present || storedDate.value !== expectedContext.date) issues.push("fecha");
+  if (!storedGlosa.present || storedGlosa.value !== expectedContext.glosa) issues.push("glosa de cabecera");
+  if (correlativeFinal === null) issues.push("correlativo final ausente o inválido");
+  if (!totalDebit.present || !sameMoney(totalDebit.value, expectedDebit)) issues.push("total Debe");
+  if (!totalCredit.present || !sameMoney(totalCredit.value, expectedCredit)) issues.push("total Haber");
+  if (totalDifference.present && !sameMoney(totalDifference.value, 0)) issues.push("diferencia de totales");
+  rows.forEach((row) => {
+    const rowIssues = [];
+    if (!row.accountValid) rowIssues.push("cuenta");
+    if (!row.glosaValid) rowIssues.push("glosa");
+    if (!row.debitValid) rowIssues.push("Debe");
+    if (!row.creditValid) rowIssues.push("Haber");
+    if (rowIssues.length > 0) issues.push(`fila ${row.index}: ${rowIssues.join(", ")}`);
+  });
+  const valid = issues.length === 0;
   return {
     ok: valid,
     valid,
@@ -287,6 +306,7 @@ export function parsePersistedVoucher(html, expected) {
     totalDebit: totalDebit.present ? totalDebit.value : null,
     totalCredit: totalCredit.present ? totalCredit.value : null,
     rows,
-    reason: valid ? null : "La persistencia no coincide o faltan campos requeridos.",
+    issues,
+    reason: valid ? null : `Persistencia no válida: ${issues.join("; ")}.`,
   };
 }

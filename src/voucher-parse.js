@@ -165,11 +165,17 @@ export function validateNumberingContext(defaults, expected) {
     ["entidad", defaults.entity, expected.entityCode],
     ["oficina", defaults.office, expected.officeCode],
   ];
-  if (expected.areaCode !== undefined && defaults.area) checks.push(["área", defaults.area, expected.areaCode]);
+  const areaIsExpected = expected.areaCode !== undefined && expected.areaCode !== null;
+  if (areaIsExpected && !defaults.area) return { ok: false, reason: "No se pudo leer el área activa del contexto." };
+  if (areaIsExpected) checks.push(["área", defaults.area, expected.areaCode]);
   const mismatch = checks.find(([, actual, configured]) => String(actual) !== String(configured));
   if (mismatch) return { ok: false, reason: `El valor activo de ${mismatch[0]} no coincide con la configuración.` };
   const namedChecks = [["entidad", defaults.entityName, expected.entityName], ["oficina", defaults.officeName, expected.officeName]]
-    .filter(([, actual, configured]) => configured !== undefined);
+    .filter(([, , configured]) => configured !== undefined && configured !== null);
+  if (expected.areaName !== undefined && expected.areaName !== null) {
+    if (!defaults.areaName) return { ok: false, reason: "No se pudo leer el nombre del área activa." };
+    namedChecks.push(["área", defaults.areaName, expected.areaName]);
+  }
   const nameMismatch = namedChecks.find(([, actual, configured]) => !normalizedText(actual).includes(normalizedText(configured)));
   return nameMismatch
     ? { ok: false, reason: `El nombre activo de ${nameMismatch[0]} no coincide con la configuración.` }

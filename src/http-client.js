@@ -6,7 +6,7 @@ function requestOptions(cfg, session, operation, type, options = {}) {
   return {
     jar: session.jar,
     timeout: cfg.requestTimeout,
-    tags: { operation, voucher_type: type == null ? "none" : String(type) },
+    tags: { name: operation, operation, voucher_type: type == null ? "none" : String(type) },
     ...options,
   };
 }

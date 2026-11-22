@@ -108,7 +108,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
   proposedCorrelative, recordOperation, onParsed }) {
   const record = recordOperation || defaultRecord;
   const options = { jar: session.jar, timeout: cfg.requestTimeout,
-    tags: { operation: "persistence_redirect", voucher_type: String(data.type) }, redirects: 0 };
+    tags: { name: "persistence_redirect", operation: "persistence_redirect", voucher_type: String(data.type) }, redirects: 0 };
   const redirectPage = http.get(`${cfg.baseUrl.replace(/\/$/, "")}/comprobantes/editar.php?codigo=${encodeURIComponent(id)}`, options);
   record(redirectPage, "persistence_redirect", data.type);
   const redirectOk = checkResponse(check, redirectPage, "edición identifica la consulta de detalle",
@@ -117,7 +117,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
 
   const detail = http.get(`${cfg.baseUrl.replace(/\/$/, "")}/comprobantes/edit_prueba.php?codigo=${encodeURIComponent(id)}`, {
     jar: session.jar, timeout: cfg.requestTimeout,
-    tags: { operation: "persistence_detail", voucher_type: String(data.type) },
+    tags: { name: "persistence_detail", operation: "persistence_detail", voucher_type: String(data.type) },
   });
   record(detail, "persistence_detail", data.type);
   const responseOk = checkResponse(check, detail, "detalle persistido disponible", (response) => response.status === 200);
@@ -130,7 +130,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
 
   const pdf = http.get(`${cfg.baseUrl.replace(/\/$/, "")}/comprobantes/imp.php?comp=${encodeURIComponent(id)}&mon=1`, {
     jar: session.jar, timeout: cfg.requestTimeout,
-    tags: { operation: "pdf", voucher_type: String(data.type) },
+    tags: { name: "pdf", operation: "pdf", voucher_type: String(data.type) },
   });
   record(pdf, "pdf", data.type);
   const pdfOk = check(pdf, { "PDF descargado con firma válida": (response) =>

@@ -1,0 +1,6 @@
+[
+  {"type":1,"name":"ingreso","lines":[{"accountNumber":"1101010001","accountName":"CAJA M/N","debit":10,"credit":0},{"accountNumber":"4102010001","accountName":"OTROS INGRESOS","debit":0,"credit":10}]},
+  {"type":2,"name":"egreso","lines":[{"accountNumber":"5102200002","accountName":"GASTO EN IMPRENTA","debit":10,"credit":0},{"accountNumber":"1101010001","accountName":"CAJA M/N","debit":0,"credit":10}]},
+  {"type":3,"name":"traspaso","lines":[{"accountNumber":"1101010001","accountName":"CAJA M/N","debit":10,"credit":0},{"accountNumber":"5102200002","accountName":"GASTO EN IMPRENTA","debit":0,"credit":10}]},
+  {"type":4,"name":"ingreso-nr","lines":[{"accountNumber":"1101010001","accountName":"CAJA M/N","debit":10,"credit":0},{"accountNumber":"4102010001","accountName":"OTROS INGRESOS","debit":0,"credit":10}]}
+]

@@ -11,9 +11,5 @@ export function createVoucher(ctx) {
   if (!context.ok) return { ok: false };
 
   const correlation = requestVoucher(ctx, session, context, glosa);
-  const entry = { runId: cfg.runId, scenario, vu, iteration, type: data.type, glosa, id: correlation.id,
-    correlative: correlation.correlative, createdAt: new Date().toISOString(), verified: correlation.verified || false,
-    status: correlation.ok ? "verified" : correlation.id ? "created-verification-incomplete" : "no-id-returned" };
-  console.log(`MANIFEST ${JSON.stringify(entry)}`);
   return { ok: correlation.verified };
 }

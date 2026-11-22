@@ -10,7 +10,7 @@ function get(http, cfg, session, url, operation, type, extras = {}) {
 }
 
 export function requestVoucher(ctx, session, context, glosa) {
-  const { http, check: verify, cfg, data, recordOperation } = ctx;
+  const { http, check: verify, cfg, data, vu, iteration, scenario, recordOperation } = ctx;
   const type = data.type;
   const form = context.html;
   const defaults = parseFormDefaults(form);
@@ -19,10 +19,13 @@ export function requestVoucher(ctx, session, context, glosa) {
   let response = get(http, cfg, session, `${cfg.baseUrl}/${path(`ajaxCorrelativo.php?${query}`)}`, "correlative", type);
   if (!verify(response, { "correlativo disponible": (r) => r.status === 200 })) return { ok: false };
   const correlative = response.body.match(/name=["']nro_correlativo["'][^>]*value=["']([^"']+)/i)?.[1] || response.body.match(/value=["']([^"']+)["'][^>]*name=["']nro_correlativo/i)?.[1];
-  if (!correlative) return { ok: false };
+  if (!/^\d+$/.test(correlative || "")) return { ok: false };
   response = get(http, cfg, session, `${cfg.baseUrl}/${path(`ajax_fecha_comprobante.php?${query}&fecha=${encodeURIComponent(defaults.date)}&codigo=0`)}`, "date", type);
   const date = response.body.match(/name=["']fecha["'][^>]*value=["']([^"']+)/i)?.[1] || response.body.match(/value=["']([^"']+)["'][^>]*name=["']fecha/i)?.[1];
-  if (!verify(response, { "fecha permitida": (r) => r.status === 200 && !!date })) return { ok: false };
+  const proposedDate = new Date(`${date}T00:00:00Z`);
+  const validDate = /^\d{4}-\d{2}-\d{2}$/.test(date || "") && !Number.isNaN(proposedDate.getTime()) &&
+    proposedDate.getUTCFullYear() === cfg.expectedContext.managementYear && proposedDate.getUTCMonth() + 1 === cfg.expectedContext.workMonth;
+  if (!verify(response, { "fecha permitida para el contexto": (r) => r.status === 200 && validDate })) return { ok: false };
 
   const accounts = [];
   for (let index = 0; index < data.lines.length; index += 1) {
@@ -39,9 +42,20 @@ export function requestVoucher(ctx, session, context, glosa) {
   response = http.post(`${cfg.baseUrl}/${path("save.php")}`, body, { jar: session.jar, headers: { "Content-Type": `multipart/form-data; boundary=${boundary}` }, tags: { operation: "save", voucher_type: String(type) } });
   recordOperation(response, "save", type);
   const id = response.body.match(/imp\.php\?comp=(\d+)&mon=(\d+)/i)?.[1];
-  if (!verify(response, { "guardado devuelve identificador": (r) => r.status === 200 && !!id })) return { ok: false };
+  if (!verify(response, { "guardado devuelve identificador": (r) => r.status === 200 && !!id })) {
+    console.log(`MANIFEST ${JSON.stringify({ runId: cfg.runId, scenario, vu, iteration, type, glosa, id: id || null, correlative, verified: false, status: "save-ambiguous" })}`);
+    return { ok: false, id, correlative, verified: false };
+  }
 
-  const result = verifyPersistedVoucher({ http, check: verify, cfg, session, data, id, glosa, date, accounts });
+  let result;
+  try {
+    result = verifyPersistedVoucher({ http, check: verify, cfg, session, data, id, glosa, date, accounts, recordOperation });
+  } catch (_) {
+    result = { ok: false, verified: false };
+  }
+  const manifest = { runId: cfg.runId, scenario, vu, iteration, type, glosa, id, correlative, verified: !!result.verified,
+    status: result.verified ? "verified" : "created-verification-incomplete" };
+  console.log(`MANIFEST ${JSON.stringify(manifest)}`);
   return { ok: result.ok, id, correlative, verified: result.verified };
 }
 

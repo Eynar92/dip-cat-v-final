@@ -3,6 +3,7 @@ import { parseFormDefaults } from "./voucher-parse.js";
 
 export function authenticate({ http, check, cfg, recordOperation = defaultRecord }, session) {
   let response = http.get(`${cfg.baseUrl}/login.html`, { jar: session.jar, tags: { operation: "login", voucher_type: "none" } });
+  recordOperation(response, "login_form", 0);
   if (!check(response, { "formulario de acceso disponible": (r) => r.status === 200 })) return false;
   response = http.post(`${cfg.baseUrl}/session.php`, { user: cfg.user, password: cfg.password }, {
     jar: session.jar, redirects: 0, headers: { "Content-Type": "application/x-www-form-urlencoded" }, tags: { operation: "login_submit", voucher_type: "none" },
@@ -16,14 +17,18 @@ export function authenticate({ http, check, cfg, recordOperation = defaultRecord
 
 export function getContext({ http, check, cfg, recordOperation = defaultRecord }, session) {
   let response = http.get(`${cfg.baseUrl}/modulo.php?codigo=3`, { jar: session.jar, redirects: 0, tags: { operation: "context", voucher_type: "none" } });
+  recordOperation(response, "module", 0);
   const moduleOk = check(response, { "módulo contable disponible": (r) => [302, 303].includes(r.status) });
   if (!moduleOk) return { ok: false };
   response = http.get(`${cfg.baseUrl}/index.php?opcion=homeModulo`, { jar: session.jar, tags: { operation: "context", voucher_type: "none" } });
+  recordOperation(response, "context", 0);
   if (!check(response, { "contexto contable disponible": (r) => r.status === 200 })) return { ok: false };
   const html = String(response.body);
   // El listado expone la sesión y el formulario confirma entidad/oficina antes de crear.
   const listing = http.get(`${cfg.baseUrl}/index.php?opcion=listComprobantes`, { jar: session.jar, tags: { operation: "context", voucher_type: "none" } });
+  recordOperation(listing, "listing", 0);
   const register = http.get(`${cfg.baseUrl}/comprobantes/register.php`, { jar: session.jar, tags: { operation: "form", voucher_type: "none" } });
+  recordOperation(register, "form", 0);
   const form = String(register.body);
   const expected = cfg.expectedContext;
   const defaults = parseFormDefaults(form);

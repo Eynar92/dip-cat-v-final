@@ -102,7 +102,16 @@ export function buildK6Invocation({ mode, testName, runId, environment, resultDi
 export function extractManifestEvents(logContents) {
   const events = [];
   for (const line of String(logContents).split(/\r?\n/)) {
-    const match = line.match(/MANIFEST\s+(\{.*\})\s*$/);
+    const structuredMessage = line.match(/\bmsg="((?:\\.|[^"\\])*)"/);
+    let message = line;
+    if (structuredMessage) {
+      try {
+        message = JSON.parse(`"${structuredMessage[1]}"`);
+      } catch {
+        continue;
+      }
+    }
+    const match = message.match(/(?:^|\s)MANIFEST\s+(\{.*\})\s*$/);
     if (!match) continue;
     try {
       events.push(JSON.parse(match[1]));

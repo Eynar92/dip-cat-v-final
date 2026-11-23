@@ -88,7 +88,7 @@ export function createVoucher(ctx) {
   const event = attemptEvent(ctx);
   let outcome = { ok: false };
   try {
-    const session = sessionFor(ctx);
+    const session = ctx.session || sessionFor(ctx);
     if (!session.authenticated) {
       event.stage = "authentication";
       const login = authenticate(ctx, session);

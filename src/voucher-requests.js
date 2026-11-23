@@ -104,7 +104,7 @@ function toMultipart(payload, glosa) {
 }
 
 export function verifyPersistedVoucher({ http, check, cfg, session, data, id, glosa, date, accounts,
-  proposedCorrelative, recordOperation, onParsed }) {
+  proposedCorrelative, expectedCorrelativeFinal, recordOperation, onParsed, onPdf }) {
   const record = recordOperation || defaultRecord;
   const options = { jar: session.jar, timeout: cfg.requestTimeout,
     tags: { name: "persistence_redirect", operation: "persistence_redirect", voucher_type: String(data.type) }, redirects: 0 };
@@ -122,7 +122,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
   const responseOk = checkResponse(check, detail, "detalle persistido disponible", (response) => response.status === 200);
   if (!responseOk) return { ok: false, parsed: null, stage: "persistence-detail", reason: "No se pudo leer el detalle persistido." };
 
-  const parsed = parsePersistedVoucher(detail.body, { data, id, glosa, date, accounts, proposedCorrelative });
+  const parsed = parsePersistedVoucher(detail.body, { data, id, glosa, date, accounts, proposedCorrelative, expectedCorrelativeFinal });
   if (onParsed) onParsed(parsed);
   const dataOk = check({ ok: parsed.ok }, { "persistencia coincide con el comprobante": (result) => result.ok });
   if (!dataOk) return { ok: false, parsed, stage: "persistence-validation", reason: parsed.reason };
@@ -132,9 +132,14 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
     tags: { name: "pdf", operation: "pdf", voucher_type: String(data.type) },
   });
   record(pdf, "pdf", data.type);
-  const pdfOk = check(pdf, { "PDF descargado con firma válida": (response) =>
-    response.status === 200 && String(response.headers["Content-Type"] || "").toLowerCase().includes("application/pdf") &&
-    String(response.body).startsWith("%PDF") });
+  const pdfResult = {
+    status: pdf.status,
+    contentType: String(pdf.headers["Content-Type"] || "").toLowerCase(),
+    signatureValid: String(pdf.body).startsWith("%PDF"),
+  };
+  pdfResult.ok = pdfResult.status === 200 && pdfResult.contentType.includes("application/pdf") && pdfResult.signatureValid;
+  if (onPdf) onPdf(pdfResult);
+  const pdfOk = check(pdf, { "PDF descargado con firma válida": () => pdfResult.ok });
   return pdfOk
     ? { ok: true, parsed, stage: "verified", reason: null }
     : { ok: false, parsed, stage: "pdf-verification", reason: "El PDF no pasó la validación de formato." };
@@ -169,6 +174,7 @@ export function requestVoucher(ctx, session, context, event) {
   const dateOk = checkResponse(check, response, "fecha permitida para el contexto",
     (value) => value.status === 200 && dateMatchesContext(date, cfg.expectedContext));
   if (!dateOk) return failure("date", "El ambiente no devolvió una fecha válida para el contexto.", { correlativeProposed });
+  event.date = date;
 
   const accounts = [];
   for (let index = 0; index < data.lines.length; index += 1) {
@@ -199,9 +205,20 @@ export function requestVoucher(ctx, session, context, event) {
   const payload = buildPayload({ defaults, data, accounts, glosa, correlative: correlativeProposed, date });
   const multipart = toMultipart(payload, glosa);
   event.stage = "save";
-  response = postRequest({ ...ctx, session, path: "comprobantes/save.php", body: multipart.body,
-    operation: "save", type: data.type, recordOperation: ctx.recordOperation || defaultRecord,
-    options: { headers: { "Content-Type": `multipart/form-data; boundary=${multipart.boundary}` } } });
+  const saveStartedAtEpochMs = Date.now();
+  try {
+    response = postRequest({ ...ctx, session, path: "comprobantes/save.php", body: multipart.body,
+      operation: "save", type: data.type, recordOperation: ctx.recordOperation || defaultRecord,
+      options: { headers: { "Content-Type": `multipart/form-data; boundary=${multipart.boundary}` } } });
+  } finally {
+    const saveFinishedAtEpochMs = Date.now();
+    ctx.onSaveTiming?.({
+      clock: "unix-epoch-milliseconds",
+      saveStartedAtEpochMs,
+      saveFinishedAtEpochMs,
+      saveDurationMs: saveFinishedAtEpochMs - saveStartedAtEpochMs,
+    });
+  }
   const id = String(response.body).match(/imp\.php\?comp=(\d+)&(?:amp;)?mon=(\d+)/i)?.[1] || null;
   event.id = id;
   const saveOk = check(response, { "guardado devuelve identificador": (value) => value.status === 200 && !!id });

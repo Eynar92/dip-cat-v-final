@@ -59,7 +59,7 @@ function firstControl(html, names, idAliases = []) {
   return { present: false, value: "", label: "" };
 }
 
-function parseCalls(source, functionName) {
+function parseCallsWithPositions(source, functionName) {
   const text = String(source);
   const starts = [...text.matchAll(new RegExp(`\\b${escapeRegExp(functionName)}\\s*\\(`, "gi"))];
   return starts.map((start) => {
@@ -78,8 +78,12 @@ function parseCalls(source, functionName) {
       else if (character === "(") depth += 1;
       else if (character === ")") depth -= 1;
     }
-    return depth === 0 ? splitArguments(text.slice(open + 1, close - 1)) : [];
-  }).filter((args) => args.length > 0);
+    return { index: start.index, args: depth === 0 ? splitArguments(text.slice(open + 1, close - 1)) : [] };
+  }).filter(({ args }) => args.length > 0);
+}
+
+function parseCalls(source, functionName) {
+  return parseCallsWithPositions(source, functionName).map(({ args }) => args);
 }
 
 function splitArguments(source) {
@@ -228,13 +232,22 @@ function readPersistedType(html) {
   return byName[normalizedText(selected.label)] || "";
 }
 
-function readExactAccountIds(html) {
-  return parseCalls(html, "setBusquedaCuentaEdit").map((args) => args.filter((argument) => /^\d+$/.test(argument)));
+function readPersistedAccountRows(html) {
+  const source = String(html);
+  const activeRows = [...source.matchAll(/\bfilaActiva\s*=\s*(\d+)\s*;?/gi)];
+  return parseCallsWithPositions(source, "setBusquedaCuentaEdit").map(({ index, args }) => {
+    const activeRow = activeRows.filter((match) => match.index < index).at(-1);
+    const row = activeRow ? Number(activeRow[1]) : null;
+    const recognized = args.length === 5 &&
+      /^\d+$/.test(args[0]) && /^\d+$/.test(args[1]) && args[2].trim() !== "" &&
+      /^\d+$/.test(args[3]) && args[4] !== undefined;
+    return { row, args, recognized };
+  });
 }
 
 export function parsePersistedVoucher(html, expected) {
   const source = String(html);
-  const { data, glosa, date, accounts, proposedCorrelative } = expected || {};
+  const { data, glosa, date, accounts, proposedCorrelative, expectedCorrelativeFinal } = expected || {};
   const type = readPersistedType(source);
   const storedDate = readControl(source, "fecha");
   const storedGlosa = readControl(source, "glosa");
@@ -242,21 +255,33 @@ export function parsePersistedVoucher(html, expected) {
   const totalDebit = readControl(source, "totaldeb");
   const totalCredit = readControl(source, "totalhab");
   const totalDifference = firstControl(source, ["total_dif", "totaldif"]);
-  const rowCalls = readExactAccountIds(source);
+  const accountCalls = readPersistedAccountRows(source);
   const lines = Array.isArray(data?.lines) ? data.lines : [];
   const rows = lines.map((line, index) => {
+    const rowNumber = index + 1;
     const debit = readControl(source, `debe${index + 1}`);
     const credit = readControl(source, `haber${index + 1}`);
     const lineGlosa = readControl(source, `glosa_detalle${index + 1}`);
-    const expectedId = String(accounts?.[index]?.id ?? "");
-    const callbackTokens = rowCalls[index] || [];
-    const accountValid = !!expectedId && callbackTokens.some((token) => token === expectedId);
+    const expectedAccount = accounts?.[index] || {};
+    const expectedId = String(expectedAccount.id ?? "");
+    const rowMatches = accountCalls.filter((call) => call.row === rowNumber);
+    const accountCall = rowMatches.length === 1 ? rowMatches[0] : null;
+    const actualId = accountCall?.args[0] ?? "";
+    const actualNumber = accountCall?.args[1] ?? "";
+    const actualName = accountCall?.args[2] ?? "";
+    const accountNumberValid = actualNumber === String(line.accountNumber ?? "");
+    const expectedName = normalizedText(line.accountName ?? expectedAccount.name ?? "");
+    const accountNameValid = !!expectedName && normalizedText(actualName) === expectedName;
+    const accountValid = !!accountCall?.recognized && rowMatches.length === 1 && !!expectedId &&
+      actualId === expectedId && accountNumberValid && accountNameValid;
     const glosaValid = lineGlosa.present && lineGlosa.value === glosa;
     const debitValid = debit.present && sameMoney(debit.value, line.debit);
     const creditValid = credit.present && sameMoney(credit.value, line.credit);
     return {
       index: index + 1,
       accountId: expectedId,
+      accountNumber: actualNumber || null,
+      accountName: actualName || null,
       accountMatched: accountValid,
       debit: debit.value,
       credit: credit.value,
@@ -278,11 +303,16 @@ export function parsePersistedVoucher(html, expected) {
   };
   const issues = [];
   if (!data || lines.length === 0) issues.push("plantilla de comprobante");
-  if (rowCalls.length !== lines.length) issues.push(`cantidad de filas (esperadas ${lines.length}, encontradas ${rowCalls.length})`);
+  if (accountCalls.length !== lines.length) issues.push(`cantidad de filas (esperadas ${lines.length}, encontradas ${accountCalls.length})`);
+  if (accountCalls.some((call) => !call.recognized || !Number.isInteger(call.row))) {
+    issues.push("no se pudo verificar la firma o la fila de setBusquedaCuentaEdit");
+  }
   if (type !== expectedContext.type) issues.push("tipo de comprobante");
   if (!storedDate.present || storedDate.value !== expectedContext.date) issues.push("fecha");
   if (!storedGlosa.present || storedGlosa.value !== expectedContext.glosa) issues.push("glosa de cabecera");
   if (correlativeFinal === null) issues.push("correlativo final ausente o inválido");
+  if (expectedCorrelativeFinal !== undefined && expectedCorrelativeFinal !== null &&
+      correlativeFinal !== String(expectedCorrelativeFinal)) issues.push("correlativo final no coincide con la evidencia esperada");
   if (!totalDebit.present || !sameMoney(totalDebit.value, expectedDebit)) issues.push("total Debe");
   if (!totalCredit.present || !sameMoney(totalCredit.value, expectedCredit)) issues.push("total Haber");
   if (totalDifference.present && !sameMoney(totalDifference.value, 0)) issues.push("diferencia de totales");
@@ -302,6 +332,7 @@ export function parsePersistedVoucher(html, expected) {
     date: storedDate.present ? storedDate.value : null,
     glosa: storedGlosa.present ? storedGlosa.value : null,
     correlativeProposed: proposedCorrelative == null ? null : String(proposedCorrelative),
+    correlativeFinalExpected: expectedCorrelativeFinal == null ? null : String(expectedCorrelativeFinal),
     correlativeFinal,
     totalDebit: totalDebit.present ? totalDebit.value : null,
     totalCredit: totalCredit.present ? totalCredit.value : null,

@@ -43,7 +43,9 @@ function persistedHtml(overrides = {}) {
     .join("\n");
   return `${inputs}
     <script>
+      filaActiva=1;
       setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1','1');
+      filaActiva=2;
       setBusquedaCuentaEdit('13291','5102200002','GASTO EN IMPRENTA','1','1');
     </script>`;
 }
@@ -117,10 +119,66 @@ test("persisted parser reports the final correlative without requiring it to equ
   assert.notEqual(result.correlativeFinal, "12");
 });
 
+test("persisted parser compares final correlative when original evidence supplies one", () => {
+  assert.equal(parsePersistedVoucher(persistedHtml(), {
+    data, id: "18363", glosa, date: "2026-09-01", accounts, proposedCorrelative: "12",
+    expectedCorrelativeFinal: "13",
+  }).ok, true);
+  const mismatch = parsePersistedVoucher(persistedHtml(), {
+    data, id: "18363", glosa, date: "2026-09-01", accounts, proposedCorrelative: "12",
+    expectedCorrelativeFinal: "14",
+  });
+  assert.equal(mismatch.ok, false);
+  assert.match(mismatch.reason, /correlativo final no coincide/);
+});
+
 test("persisted parser rejects an account ID that only contains the expected ID", () => {
   const html = persistedHtml().replace("setBusquedaCuentaEdit('13004'", "setBusquedaCuentaEdit('913004'");
   const result = parsePersisted(html);
   assert.equal(result.ok, false);
+});
+
+test("persisted parser validates the account ID only in codigoCuenta", () => {
+  const auxiliaryContainsExpected = persistedHtml().replace(
+    "setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1','1')",
+    "setBusquedaCuentaEdit('99999','1101010001','CAJA M/N','13004','1')",
+  );
+  const result = parsePersisted(auxiliaryContainsExpected);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /fila 1: cuenta/);
+});
+
+test("persisted parser associates callbacks with explicit filaActiva rows", () => {
+  const swapped = persistedHtml().replace(
+    "filaActiva=1;\n      setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1','1');\n      filaActiva=2;\n      setBusquedaCuentaEdit('13291','5102200002','GASTO EN IMPRENTA','1','1');",
+    "filaActiva=1;\n      setBusquedaCuentaEdit('13291','5102200002','GASTO EN IMPRENTA','1','1');\n      filaActiva=2;\n      setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1','1');",
+  );
+  const result = parsePersisted(swapped);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /fila 1: cuenta/);
+  assert.match(result.reason, /fila 2: cuenta/);
+});
+
+test("persisted parser rejects absent and incomplete account callbacks", () => {
+  const absent = persistedHtml().replace(/filaActiva=2;\s*setBusquedaCuentaEdit\([^;]+;?/, "");
+  const incomplete = persistedHtml().replace(
+    "setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1','1')",
+    "setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','1')",
+  );
+  assert.equal(parsePersisted(absent).ok, false);
+  const result = parsePersisted(incomplete);
+  assert.equal(result.ok, false);
+  assert.match(result.reason, /no se pudo verificar la firma o la fila/);
+});
+
+test("sanitized persisted response sample identifies the account ID and its explicit row", () => {
+  const sample = persistedHtml().replaceAll("'1','1'", "'0',''");
+  const result = parsePersisted(sample);
+  assert.equal(result.ok, true);
+  assert.deepEqual(result.rows.map(({ accountId, accountNumber, accountName }) => ({ accountId, accountNumber, accountName })), [
+    { accountId: "13004", accountNumber: "1101010001", accountName: "CAJA M/N" },
+    { accountId: "13291", accountNumber: "5102200002", accountName: "GASTO EN IMPRENTA" },
+  ]);
 });
 
 test("persisted parser rejects a missing amount even when the expected amount is zero", () => {

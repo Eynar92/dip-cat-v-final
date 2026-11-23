@@ -14,6 +14,7 @@ function isSuccessful(check, response, name, predicate) {
 export function authenticate(ctx, session) {
   const { check, cfg } = ctx;
   let response = request(ctx, session, "login.html", "login_form");
+  ctx.onAuthResponse?.(response, `${cfg.baseUrl.replace(/\/$/, "")}/login.html`);
   if (!isSuccessful(check, response, "formulario de acceso disponible", (value) => value.status === 200)) {
     return { ok: false, stage: "login-form", reason: "El formulario de acceso no respondió correctamente." };
   }
@@ -21,14 +22,23 @@ export function authenticate(ctx, session) {
   response = postRequest({ ...ctx, session, path: "session.php", body: { user: cfg.user, password: cfg.password },
     operation: "login_submit", type: null, recordOperation: ctx.recordOperation || defaultRecord,
     options: { redirects: 0, headers: { "Content-Type": "application/x-www-form-urlencoded" } } });
+  ctx.onAuthResponse?.(response, `${cfg.baseUrl.replace(/\/$/, "")}/session.php`);
   if (!isSuccessful(check, response, "autenticación aceptada", (value) => [302, 303].includes(value.status))) {
     return { ok: false, stage: "authentication", reason: "El ambiente rechazó la autenticación." };
   }
 
   response = request(ctx, session, "index.php", "auth_check");
+  ctx.onAuthResponse?.(response, `${cfg.baseUrl.replace(/\/$/, "")}/index.php`);
   const authenticated = isSuccessful(check, response, "sesión autenticada",
     (value) => value.status === 200 && !String(value.body).includes('name="password"'));
   return authenticated ? { ok: true } : { ok: false, stage: "authentication", reason: "La sesión no quedó autenticada." };
+}
+
+export function checkAuthenticatedSession(ctx, session) {
+  const response = request(ctx, session, "index.php", "auth_check");
+  ctx.onAuthResponse?.(response, `${ctx.cfg.baseUrl.replace(/\/$/, "")}/index.php`);
+  return isSuccessful(ctx.check, response, "sesión autenticada en preflight",
+    (value) => value.status === 200 && !String(value.body).includes('name="password"'));
 }
 
 export function getContext(ctx, session) {

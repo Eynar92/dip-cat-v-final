@@ -1,10 +1,11 @@
 import { recordOperation as defaultRecord } from "./metrics.js";
-import { getRequest, postRequest } from "./http-client.js";
+import { getRequest, notifySessionState, postRequest } from "./http-client.js";
 import { parseLineContext, parseFormDefaults, parsePersistedVoucher, resolveAccount, validateLineContext } from "./voucher-parse.js";
 
 function requestContext(ctx, session, operation, type, path) {
   return { http: ctx.http, cfg: ctx.cfg, session, path, operation, type,
-    recordOperation: ctx.recordOperation || defaultRecord };
+    recordOperation: ctx.recordOperation || defaultRecord,
+    onSessionInvalidResponse: ctx.onSessionInvalidResponse };
 }
 
 function checkResponse(check, response, name, predicate) {
@@ -104,11 +105,12 @@ function toMultipart(payload, glosa) {
 }
 
 export function verifyPersistedVoucher({ http, check, cfg, session, data, id, glosa, date, accounts,
-  proposedCorrelative, expectedCorrelativeFinal, recordOperation, onParsed, onPdf }) {
+  proposedCorrelative, expectedCorrelativeFinal, recordOperation, onParsed, onPdf, onSessionInvalidResponse }) {
   const record = recordOperation || defaultRecord;
   const options = { jar: session.jar, timeout: cfg.requestTimeout,
     tags: { name: "persistence_redirect", operation: "persistence_redirect", voucher_type: String(data.type) }, redirects: 0 };
   const redirectPage = http.get(`${cfg.baseUrl.replace(/\/$/, "")}/comprobantes/editar.php?codigo=${encodeURIComponent(id)}`, options);
+  notifySessionState(redirectPage, onSessionInvalidResponse);
   record(redirectPage, "persistence_redirect", data.type);
   const redirectOk = checkResponse(check, redirectPage, "edición identifica la consulta de detalle",
     (response) => response.status === 200 && String(response.body).includes("edit_prueba.php"));
@@ -118,6 +120,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
     jar: session.jar, timeout: cfg.requestTimeout,
     tags: { name: "persistence_detail", operation: "persistence_detail", voucher_type: String(data.type) },
   });
+  notifySessionState(detail, onSessionInvalidResponse);
   record(detail, "persistence_detail", data.type);
   const responseOk = checkResponse(check, detail, "detalle persistido disponible", (response) => response.status === 200);
   if (!responseOk) return { ok: false, parsed: null, stage: "persistence-detail", reason: "No se pudo leer el detalle persistido." };
@@ -131,6 +134,7 @@ export function verifyPersistedVoucher({ http, check, cfg, session, data, id, gl
     jar: session.jar, timeout: cfg.requestTimeout,
     tags: { name: "pdf", operation: "pdf", voucher_type: String(data.type) },
   });
+  notifySessionState(pdf, onSessionInvalidResponse);
   record(pdf, "pdf", data.type);
   const pdfResult = {
     status: pdf.status,
@@ -229,6 +233,7 @@ export function requestVoucher(ctx, session, context, event) {
   event.stage = "persistence";
   const persisted = verifyPersistedVoucher({ http: ctx.http, check, cfg, session, data, id, glosa, date, accounts,
     proposedCorrelative: correlativeProposed, recordOperation: ctx.recordOperation,
+    onSessionInvalidResponse: ctx.onSessionInvalidResponse,
     onParsed: (parsed) => { event.correlativeFinal = parsed.correlativeFinal; } });
   const correlativeFinal = persisted.parsed?.correlativeFinal || null;
   event.correlativeFinal = correlativeFinal;

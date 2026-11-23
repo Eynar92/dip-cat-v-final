@@ -1,29 +1,6 @@
 import { recordFlowDuration } from "./metrics.js";
-import { authenticate, getContext } from "./workflow.js";
+import { getContext } from "./workflow.js";
 import { requestVoucher } from "./voucher-requests.js";
-
-const sessionsByVu = new Map();
-
-function createSession(http, baseUrl) {
-  const jar = http.cookieJar();
-  jar.clear(baseUrl);
-  return { jar, authenticated: false };
-}
-
-function sessionFor(ctx) {
-  const policy = ctx.cfg.sessionPolicy || "per-iteration";
-  if (policy === "per-vu") {
-    const key = String(ctx.vu);
-    let session = sessionsByVu.get(key);
-    if (!session) {
-      session = createSession(ctx.http, ctx.cfg.baseUrl);
-      sessionsByVu.set(key, session);
-    }
-    return session;
-  }
-  if (policy !== "per-iteration") throw new Error(`Política de sesión no admitida: ${policy}`);
-  return createSession(ctx.http, ctx.cfg.baseUrl);
-}
 
 function secretSafeMessage(error, cfg) {
   const safePart = (value) => {
@@ -88,27 +65,31 @@ export function createVoucher(ctx) {
   const event = attemptEvent(ctx);
   let outcome = { ok: false };
   try {
-    const session = ctx.session || sessionFor(ctx);
-    if (!session.authenticated) {
-      event.stage = "authentication";
-      const login = authenticate(ctx, session);
-      if (!login.ok) {
-        outcome = { ok: false, stage: login.stage, reason: login.reason };
-        return { ok: false, event: resultEvent(event, outcome) };
-      }
-      session.authenticated = true;
+    const session = ctx.session;
+    if (!session?.authenticated || session.invalidated) {
+      outcome = { ok: false, stage: "session", reason: "El flujo necesita una sesión autenticada." };
+      return { ok: false, event: resultEvent(event, outcome) };
     }
+    const flowContext = {
+      ...ctx,
+      onSessionInvalidResponse: (response) => {
+        session.invalidated = true;
+        ctx.onSessionInvalidResponse?.(response, session);
+      },
+    };
 
     event.stage = "context-validation";
-    const context = getContext(ctx, session);
+    const context = getContext(flowContext, session);
     if (!context.ok) {
+      if (session.invalidated) event.sessionInvalidated = true;
       outcome = { ok: false, stage: context.stage, reason: context.reason,
         numberingContext: context.numberingContext || null };
       return { ok: false, event: resultEvent(event, outcome) };
     }
     event.numberingContext = context.numberingContext;
 
-    outcome = requestVoucher(ctx, session, context, event);
+    outcome = requestVoucher(flowContext, session, context, event);
+    if (session.invalidated) event.sessionInvalidated = true;
     resultEvent(event, outcome);
     if (!outcome.ok && !outcome.status) {
       event.status = event.id ? "created-verification-incomplete" : "failed-before-save";

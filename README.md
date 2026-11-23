@@ -31,7 +31,7 @@ El usuario y la contraseña son obligatorios en todas las modalidades. El token 
 
 Las variables del entorno del proceso tienen prioridad sobre los valores de `.env`. El lanzador busca el ejecutable `k6` en el PATH; si está en otra ubicación, define su ruta mediante `K6_BIN`.
 
-Antes de ejecutar, revisa `config/environment.json`: la URL, la gestión, el mes, la entidad y la oficina deben corresponder al ambiente habilitado. El flujo valida el contexto activo y no lo cambia para forzar la prueba. Los datos de `data/vouchers.json` solo deben ajustarse después de verificarlos con el grupo.
+Antes de ejecutar, revisa `config/environment.json`: la URL, la gestión, el mes, la entidad y la oficina deben corresponder al ambiente habilitado. Para cloud, `cloud.loadZone` conserva la región acordada `amazon:us:ashburn` y queda registrada en la configuración efectiva. El flujo valida el contexto activo y no lo cambia para forzar la prueba. Los datos de `data/vouchers.json` solo deben ajustarse después de verificarlos con el grupo.
 
 ## Estructura del proyecto
 
@@ -39,20 +39,23 @@ Antes de ejecutar, revisa `config/environment.json`: la URL, la gestión, el mes
 dip-cat-v-final/
 ├── config/                     Configuración del ambiente y de las pruebas
 │   ├── tests.json              Los seis tests: VUs, etapas, pausas, tipos y thresholds
-│   ├── environment.json        URL, contexto contable, timeout y política de sesión
+│   ├── environment.json        URL, contexto, timeout, sesión y zona cloud
 │   └── test-config.js          Validación de los tests y construcción del escenario k6
 ├── data/                       Datos que se utilizan para completar los comprobantes
 │   └── vouchers.json           Cuentas e importes de los cuatro tipos
 ├── src/                        Código ejecutado por k6
 │   ├── main.js                 Selección del tipo por iteración y registro del resultado
 │   ├── config.js               Carga de configuración y variables de entorno
-│   ├── voucher-flow.js         Coordinación del flujo y manejo de sesiones y errores
+│   ├── session-policy.js       Estrategias per-iteration, per-vu y shared
+│   ├── session-cookies.js      Transferencia segura de cookies al cookie jar de k6
+│   ├── session-summary.js      Exclusión de setup_data de los resúmenes locales
+│   ├── voucher-flow.js         Flujo contable con una sesión ya autenticada
 │   ├── workflow.js             Autenticación y consulta del contexto contable
 │   ├── voucher-requests.js     Preparación, guardado y verificación del comprobante
 │   ├── http-client.js          Peticiones HTTP con timeout y etiquetas de operación
 │   ├── voucher-parse.js        Extracción y comparación de datos de las respuestas
 │   └── metrics.js              Métricas de tiempos, éxito y fallos del flujo
-├── tests/                      Pruebas offline de parsers, configuración y lanzador
+├── tests/                      Pruebas offline de flujo, sesiones, parsers y lanzador
 ├── docs/                       Documentación complementaria de la implementación
 ├── results/                    Resultados generados localmente; no se publican en Git
 │   └── <runId>/                Carpeta exclusiva de una ejecución
@@ -71,11 +74,11 @@ Para cambiar VUs, etapas, duración, pausas, tipos o thresholds de un test exist
 
 ## Flujos
 
-Se evalúa el registro de un comprobante contable completo, desde el acceso al sistema hasta la consulta de sus datos y la descarga del documento. Cada iteración representa un intento de crear un comprobante y recorre estos pasos:
+Se evalúa el registro de un comprobante contable completo, desde una sesión autenticada hasta la consulta de sus datos y la descarga del documento. Cada iteración representa un intento de crear un comprobante y usa la sesión según la política configurada:
 
-1. Iniciar sesión con el usuario configurado.
-2. Acceder a Contabilidad y comprobar gestión, mes, entidad y oficina activos.
-3. Abrir el formulario y obtener el correlativo propuesto y una fecha permitida para el tipo elegido.
+1. Usar una sesión autenticada en la preparación, al iniciar el VU o para esta iteración, según la política seleccionada.
+2. Acceder a Contabilidad, comprobar gestión, mes, entidad y oficina activos, consultar el listado y abrir el formulario.
+3. Obtener del formulario el correlativo propuesto y una fecha permitida para el tipo elegido.
 4. Buscar las cuentas y completar dos líneas con importes balanceados.
 5. Guardar y extraer el ID interno que devuelve el servidor.
 6. Consultar el registro para comparar tipo, fecha, glosas, cuentas, líneas e importes y recuperar el correlativo final.
@@ -83,13 +86,19 @@ Se evalúa el registro de un comprobante contable completo, desde el acceso al s
 
 ### Autenticación y sesiones
 
-Actualmente `config/environment.json` utiliza `sessionPolicy: "per-iteration"`: cada VU inicia sesión antes de cada comprobante. Los VUs usan la misma cuenta configurada, pero cada uno mantiene su propio almacén de cookies; no comparten una sesión. La autenticación genera carga adicional y sus peticiones forman parte de las métricas HTTP generales. El tiempo `voucher_flow_duration` también incluye la autenticación cuando se realiza.
+La política se selecciona en `config/environment.json` mediante `sessionPolicy` y acepta `per-iteration`, `per-vu` o `shared`. La política elegida para el proyecto es `shared`, respaldada por las corridas compartidas de 10 VUs (20 registros verificados) y 50 VUs (100 registros verificados) en Grafana Cloud. La carpeta hermana `../evidencia-sesion-compartida/` está fuera de este checkout y conserva resultados y límites de esas ejecuciones.
 
-Para representar usuarios que permanecen dentro del sistema, el comportamiento previsto es autenticar una vez por VU y reutilizar su sesión en los siguientes comprobantes. Esa modalidad todavía no está lista para utilizarse en las pruebas formales. Existe una rama `per-vu` en el código que conserva el estado de autenticación, pero el script no configura la conservación de cookies entre iteraciones. k6 las reinicia por defecto, de modo que mantener la marca de autenticado no garantiza conservar una sesión válida.
+- `per-iteration`: crea y autentica una sesión para cada comprobante.
+- `per-vu`: cada usuario virtual autentica al comenzar y conserva su propia sesión entre iteraciones.
+- `shared`: autentica una vez durante la preparación y cada VU instala en su cookie jar una copia de la misma identidad de sesión del servidor.
 
-Antes de activar `per-vu`, se debe completar el manejo de cookies y verificar varias iteraciones por VU, primero con smoke y después con concurrencia mínima. Cambiar únicamente el JSON no resuelve ese punto. También se debe definir si el tiempo del flujo de comprobantes incluirá el login inicial o si se medirá por separado. La opción [`noCookiesReset` de k6](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#no-cookies-reset) permite conservar las cookies entre iteraciones; cada VU sigue teniendo su propio almacén.
+Una **cuenta** es la identidad y credencial configurada para entrar; una **sesión** es el estado autenticado que el servidor reconoce mediante cookies; un **VU** es un usuario virtual de k6 con su propio entorno de ejecución y cookie jar. Compartir sesión no significa compartir el mismo objeto de cookies entre VUs. La evidencia permite adoptar `shared` en este proyecto, pero no demuestra estabilidad prolongada, cargas superiores a 50 VUs ni que el servidor gestione cada solicitud simultáneamente.
 
-Se utiliza k6 HTTP: las acciones se reproducen mediante peticiones al servidor. No se controla la interfaz del navegador ni se ejecuta el JavaScript recibido en las respuestas; las consultas posteriores al guardado se realizan explícitamente.
+Las peticiones HTTP generales incluyen las autenticaciones. `voucher_flow_duration` empieza cuando la política ya entregó una sesión autenticada y termina con las comprobaciones del flujo; excluye tanto el login como la pausa entre iteraciones. Por eso, los valores históricos de esa métrica que incluían autenticación no son directamente comparables con los actuales.
+
+Si una respuesta confirma que la sesión se perdió (HTTP 401, redirección a login o formulario de contraseña), el intento se registra como fallido; no se reautentica en medio del guardado. `per-vu` puede autenticar de nuevo en una iteración posterior. `shared` registra la pérdida de la sesión preparada sin iniciar logins individuales por VU. Un estado HTTP que no permita confirmar pérdida no se presenta como diagnóstico de sesión.
+
+Se utiliza k6 HTTP: las acciones se reproducen mediante peticiones al servidor. El recorrido incluye consultar el listado y abrir el formulario antes de preparar el comprobante. No se controla la interfaz del navegador ni se ejecuta el JavaScript recibido en las respuestas; las consultas posteriores al guardado se realizan explícitamente.
 
 Las plantillas iniciales son balanceadas por 10 y no incluyen facturas, auxiliares ni libretas:
 
@@ -211,6 +220,8 @@ El lanzador muestra el `runId` al comenzar y crea una carpeta exclusiva `results
 - `manifest.ndjson`: registros de los intentos, con glosa, tipo, VU, iteración, ID interno, correlativos y estado de verificación.
 - `summary.json`: resumen estadístico cuando k6 lo genera localmente.
 
+El resumen local/híbrido omite `setup_data`, que puede contener la sesión serializada. En cloud, k6 conserva las estadísticas en Grafana y no se genera un resumen local. Las cookies no se imprimen en consola ni se guardan en los archivos de resultados.
+
 En modalidad cloud, el manifiesto local depende de los eventos recibidos en consola. Si el resumen o los eventos no están disponibles localmente, el lanzador genera un archivo de estado que explica la ausencia. La carpeta local no sustituye la exportación de métricas remotas.
 
 El manifiesto distingue los intentos verificados, los fallos previos al guardado y los registros cuyo guardado o verificación no pudo confirmarse. El flujo no reintenta automáticamente los guardados ambiguos; antes de repetirlos, revisa si el comprobante ya existe.
@@ -245,4 +256,4 @@ Las pruebas automatizadas de parsers, configuración y lanzador se ejecutan sin 
 npm test
 ```
 
-Estas pruebas verifican parsers, configuración y lanzamiento con datos locales. No crean comprobantes ni sustituyen las pruebas contra el ambiente.
+La suite verifica parsers, configuración, los tres perfiles de sesión, cookies entre iteraciones con un servidor local de prueba y el lanzamiento. Incluye verificaciones de asignación para 5 y 10 VUs. No envía peticiones al ambiente financiero, no crea comprobantes y no sustituye las pruebas reales autorizadas.

@@ -2,11 +2,11 @@
 
 ## Objetivo y alcance
 
-Comparar dos condiciones con la misma carga pequeña para observar el comportamiento del flujo cuando dos VUs usan una única sesión autenticada o sesiones independientes. La prueba se ejecutó en modo local, sin Grafana Cloud. No se modificó la política predeterminada de sesión (`per-iteration`).
+Este documento conserva el experimento comparativo de sesiones y sus límites. La configuración vigente del proyecto selecciona `shared` como política predeterminada, respaldada por las corridas cloud documentadas en la carpeta hermana `../evidencia-sesion-compartida/README.md`, fuera de este checkout: 20 registros verificados con 10 VUs y 100 con 50 VUs. La evidencia no demuestra estabilidad prolongada ni cargas superiores a 50 VUs.
 
-Cada condición usa 2 VUs y 2 iteraciones por VU (4 iteraciones totales), sin ramp-up. Cada VU procesa los tipos 3 y 1, en ese orden. Hay una pausa de 3 segundos entre iteraciones. El máximo es de 4 comprobantes por condición y 8 en las dos condiciones combinadas. La creación no tiene reintentos automáticos.
+El perfil actual usa 2 VUs y 2 iteraciones por VU (4 iteraciones totales), sin ramp-up. Cada VU procesa los tipos 3 y 1, en ese orden. Hay una pausa de 3 segundos entre iteraciones. El máximo es de 4 comprobantes por condición y 8 en las dos condiciones combinadas. La creación no tiene reintentos automáticos.
 
-La preparación de sesiones toma el total de VUs del perfil: la condición compartida hace una autenticación y asigna copias de esa identidad a todos los VUs; la independiente hace una autenticación por VU y exige identidades distintas. Antes de ejecutar el flujo, ambas condiciones verifican las sesiones de cada VU.
+El experimento reutiliza las estrategias comunes de `src/session-policy.js`: `shared` autentica una vez en `setup()` y cada VU instala su cookie en su propio jar; `independent` usa `per-vu`, así que cada VU se autentica cuando empieza su primera iteración y conserva esa sesión. En esta configuración se espera 1 autenticación en setup para `shared` y 0 para `independent`; en total, 1 y 2 respectivamente. `independent` no preautentica ni ejecuta un preflight separado por VU. Los dos modos conservan cookies entre iteraciones y la creación no tiene reintentos automáticos.
 
 El comando es `npm run experiment:session -- --condition shared` o `npm run experiment:session -- --condition independent` desde la raíz del repositorio. El runner necesita `FINANCIERO_USER`, `FINANCIERO_PASSWORD` y `FINANCIERO_BASE_URL` en `.env`.
 
@@ -18,7 +18,7 @@ La respuesta editable real contiene, por ejemplo, `filaActiva=1; setBusquedaCuen
 
 ## Ejecución local y cloud
 
-El experimento admite `--mode local` (predeterminado) y `--mode cloud`. En ambos casos conserva VUs, iteraciones, tipos, pausas y timeout. La política predeterminada del flujo habitual sigue sin cambios.
+El experimento admite `--mode local` (predeterminado) y `--mode cloud`. En ambos casos conserva VUs, iteraciones, tipos, pausas y timeout. Su condición comparativa elige `shared` o `independent`; el flujo habitual selecciona la política desde `config/environment.json`.
 
 Desde la raíz del repositorio:
 
@@ -50,6 +50,8 @@ En ambas condiciones, todos los checks y thresholds del flujo aprobaron. No hubo
 
 La revisión posterior de solo lectura terminó con **8/8 registros verificados**, sin discrepancias respecto a los manifiestos originales. En los cuatro registros de tipo 3, las filas fueron Caja M/N (ID 13004) y Gasto en Imprenta (ID 13291). En los cuatro registros de tipo 1, fueron Caja M/N (ID 13004) y Otros Ingresos (ID 13195). En los ocho registros coincidieron tipo, fecha `2026-09-01`, glosa de cabecera y de detalle, importes `10.00/0.00` y `0.00/10.00`, totales `10.00/10.00` y correlativo final. El PDF de cada registro devolvió HTTP 200, `application/pdf` y firma `%PDF`. No se creó ni editó ningún comprobante.
 
+Estos resultados son históricos y conservan el comportamiento de las corridas originales: la condición independiente realizó dos autenticaciones durante su preparación. La implementación actual, descrita arriba, difiere: autentica cada VU independiente al iniciar su iteración. El conteo histórico no debe confundirse con el conteo esperado del código actual.
+
 Los registros fueron:
 
 | Condición | Tipo | VU / iteración | ID | Correlativo final |
@@ -71,13 +73,13 @@ Los scripts del experimento usan `handleSummary()` para quitar `setup_data` del 
 
 El manifiesto, la configuración efectiva, el resumen y la verificación posterior se guardan localmente bajo `results/<RUN_ID>/`, una carpeta ignorada por Git. La revisión de los registros originales quedó en una carpeta `results/reviews/post-original-session-review-*`, también local e ignorada por Git. Este documento incluye el diseño, los resultados y las limitaciones necesarios para entender el experimento sin esos archivos locales.
 
-Estas corridas no representan una carga de 100 o 500 VUs. Tampoco prueban que compartir una sesión nunca produzca interferencias. No se cambió la política predeterminada (`per-iteration`).
+Estas corridas comparativas de 2 VUs no representan una carga de 100 o 500 VUs ni prueban que compartir una sesión nunca produzca interferencias. La decisión vigente de seleccionar `shared` como política predeterminada se apoya además en la evidencia cloud de 10 y 50 VUs descrita al inicio; tampoco esa evidencia demuestra estabilidad prolongada ni cargas superiores a 50 VUs.
 
 Una invocación previa de la condición independiente no inició autenticación porque el entorno aislado no resolvió el host; no produjo comprobantes. La ejecución válida posterior se completó con acceso de red autorizado.
 
 ## Conclusión acotada
 
-El flujo completó cuatro comprobantes con una cookie de sesión compartida y otros cuatro con cookies independientes. No hubo errores de negocio, persistencia o descarga del PDF. Como los POST de guardado no se solaparon, no hay evidencia en estas corridas de una carrera sobre correlativos; se necesitaría una condición que provoque o mida solapamiento para evaluar ese caso. Este resultado no justifica cambiar la política predeterminada de sesiones ni permite extrapolar a cargas mayores.
+El flujo completó cuatro comprobantes con una cookie de sesión compartida y otros cuatro con cookies independientes. No hubo errores de negocio, persistencia o descarga del PDF. Como los POST de guardado no se solaparon, no hay evidencia en estas corridas de una carrera sobre correlativos; se necesitaría una condición que provoque o mida solapamiento para evaluar ese caso. Este pequeño contraste no permite extrapolar a cargas mayores ni sustituye la evidencia cloud que respalda la selección de `shared`.
 
 ## Siguiente prueba propuesta
 

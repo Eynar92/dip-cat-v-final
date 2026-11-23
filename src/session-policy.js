@@ -3,6 +3,11 @@ import { captureResponseCookies, exportActiveCookies, findSessionIdentity, hasCo
 
 const VALID_POLICIES = ["per-iteration", "per-vu", "shared"];
 const sessionsByVu = new Map();
+const SAFE_SESSION_ERROR = "No se pudo preparar o instalar la sesión.";
+
+function failedSession(stage = "session") {
+  return { ok: false, session: null, stage, reason: SAFE_SESSION_ERROR };
+}
 
 function createSession(http, baseUrl, policy) {
   const jar = http.cookieJar();
@@ -28,8 +33,8 @@ function login(ctx, session, cookieStore = null) {
   if (cookieStore) {
     try {
       session.identity = findSessionIdentity(exportActiveCookies(session.jar, ctx.cfg.baseUrl, cookieStore));
-    } catch (error) {
-      return { ok: false, session: null, stage: "session-identity", reason: String(error?.message || error).slice(0, 250) };
+    } catch {
+      return { ok: false, session: null, stage: "session-identity", reason: SAFE_SESSION_ERROR };
     }
   }
   return { ok: true, session, stage: null, reason: null };
@@ -46,19 +51,18 @@ export function prepareSession(ctx) {
   const policy = validateSessionPolicy(ctx.cfg.sessionPolicy);
   if (policy !== "shared") return null;
 
-  const session = { jar: new ctx.http.CookieJar(), policy, invalidated: false };
-  session.jar.clear(ctx.cfg.baseUrl);
-  const cookieStore = new Map();
-  const authenticated = login(ctx, session, cookieStore);
-  if (!authenticated.ok) {
-    return { ok: false, stage: authenticated.stage, reason: authenticated.reason };
-  }
-
   try {
+    const session = { jar: new ctx.http.CookieJar(), policy, invalidated: false };
+    session.jar.clear(ctx.cfg.baseUrl);
+    const cookieStore = new Map();
+    const authenticated = login(ctx, session, cookieStore);
+    if (!authenticated.ok) {
+      return { ok: false, stage: authenticated.stage, reason: authenticated.reason };
+    }
     const cookies = exportActiveCookies(session.jar, ctx.cfg.baseUrl, cookieStore);
     return { ok: true, cookies, identity: session.identity };
-  } catch (error) {
-    return { ok: false, stage: "session-transfer", reason: String(error?.message || error).slice(0, 250) };
+  } catch {
+    return { ok: false, stage: "session-preparation", reason: SAFE_SESSION_ERROR };
   }
 }
 
@@ -89,25 +93,36 @@ function sharedSession(ctx, setupData, vu) {
 
 export function acquireSession(ctx, setupData = null) {
   const policy = validateSessionPolicy(ctx.cfg.sessionPolicy);
-  if (policy === "shared") return sharedSession(ctx, setupData, ctx.vu);
+  if (policy === "shared") {
+    try { return sharedSession(ctx, setupData, ctx.vu); }
+    catch { return failedSession("session"); }
+  }
 
   if (policy === "per-iteration") {
-    const session = createSession(ctx.http, ctx.cfg.baseUrl, policy);
-    return login(ctx, session, new Map());
+    try {
+      const session = createSession(ctx.http, ctx.cfg.baseUrl, policy);
+      return login(ctx, session, new Map());
+    } catch {
+      return failedSession("authentication");
+    }
   }
 
-  const key = String(ctx.vu);
-  let session = sessionsByVu.get(key);
-  if (session?.invalidated) {
-    sessionsByVu.delete(key);
-    session = null;
-  }
-  if (session) return { ok: true, session, stage: null, reason: null };
+  try {
+    const key = String(ctx.vu);
+    let session = sessionsByVu.get(key);
+    if (session?.invalidated) {
+      sessionsByVu.delete(key);
+      session = null;
+    }
+    if (session) return { ok: true, session, stage: null, reason: null };
 
-  session = createSession(ctx.http, ctx.cfg.baseUrl, policy);
-  const result = login(ctx, session, new Map());
-  if (result.ok) sessionsByVu.set(key, session);
-  return result;
+    session = createSession(ctx.http, ctx.cfg.baseUrl, policy);
+    const result = login(ctx, session, new Map());
+    if (result.ok) sessionsByVu.set(key, session);
+    return result;
+  } catch {
+    return failedSession("authentication");
+  }
 }
 
 export function invalidateSession(vu, currentSession = null) {

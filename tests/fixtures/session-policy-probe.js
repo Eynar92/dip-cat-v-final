@@ -37,8 +37,19 @@ export function setup() {
 export function run(setupData) {
   const vu = execution.vu.idInTest;
   const iteration = execution.vu.iterationInScenario + 1;
-  const ctx = requestContext(vu, iteration);
-  const acquired = acquireSession(ctx, setupData);
+  let ctx = requestContext(vu, iteration);
+  let input = setupData;
+  if (__ENV.FORCE_INSTALL_EXCEPTION === "true") {
+    const sentinel = "SESSION_COOKIE_SENTINEL_OFFLINE_38ca";
+    input = { ...setupData, cookies: setupData.cookies.map((cookie, index) =>
+      index === 0 ? { ...cookie, value: sentinel } : cookie) };
+    ctx = { ...ctx, http: { cookieJar: () => ({
+      clear() {},
+      set(_url, _name, value) { throw new Error(value); },
+      cookiesForURL() { return {}; },
+    }) } };
+  }
+  const acquired = acquireSession(ctx, input);
   if (!acquired.ok) {
     const event = { vu, iteration, status: "failed-before-save", stage: acquired.stage || "authentication",
       error: acquired.reason || "No se pudo obtener una sesión autenticada." };

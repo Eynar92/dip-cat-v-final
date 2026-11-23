@@ -74,11 +74,16 @@ async function runPolicy(policy, options = {}) {
   const mock = await startMock(options);
   const tempDir = mkdtempSync(path.join(os.tmpdir(), "session-policy-offline-"));
   const summaryPath = path.join(tempDir, "summary.json");
+  const vus = options.vus || 2;
+  const iterations = options.iterations || 2;
   try {
-    const result = await runK6(["run", "--env", `SESSION_POLICY=${policy}`,
+    const args = ["run", "--env", `SESSION_POLICY=${policy}`,
       "--env", `FINANCIERO_BASE_URL=${mock.baseUrl}`, "--env", "K6_SAFE_SUMMARY_PATH=" + summaryPath,
-      "--env", "PROBE_VUS=2", "--env", "PROBE_ITERATIONS=2", script], root);
-    const expectedExitCode = options.rejectLogin ? 99 : 0;
+      "--env", `PROBE_VUS=${vus}`, "--env", `PROBE_ITERATIONS=${iterations}`];
+    if (options.forceInstallException) args.push("--env", "FORCE_INSTALL_EXCEPTION=true");
+    args.push(script);
+    const result = await runK6(args, root);
+    const expectedExitCode = options.rejectLogin || options.forceInstallException ? 99 : 0;
     assert.equal(result.status, expectedExitCode, `${result.stdout}\n${result.stderr}`);
     const summary = JSON.parse(readFileSync(summaryPath, "utf8"));
     assert.equal(Object.hasOwn(summary, "setup_data"), false);
@@ -135,3 +140,33 @@ test("rejected login produces failed manifest attempts and a failing threshold",
   assert.ok(result.summary.metrics.checks.values.fails > 0);
   assert.equal(result.summary.metrics.checks.thresholds["rate==1"].ok, false);
 });
+
+test("cookie install exceptions produce only a safe failure event and summary", async () => {
+  const result = await runPolicy("shared", { forceInstallException: true });
+  assert.equal(result.logins, 1);
+  assert.equal(result.probes.length, 0);
+  const events = extractManifestEvents(result.output);
+  assert.equal(events.length, 4);
+  assert.ok(events.every((event) => event.stage === "session" &&
+    event.error === "No se pudo preparar o instalar la sesión."));
+  assert.equal(`${result.output}\n${JSON.stringify(result.summary)}`.includes(sentinel), false);
+});
+
+for (const vus of [5, 10]) {
+  test(`shared and per-vu cookies scale correctly to ${vus} VUs`, async () => {
+    const shared = await runPolicy("shared", { vus, iterations: 2 });
+    assert.equal(shared.logins, 1);
+    assert.equal(shared.probes.length, vus * 2);
+    assert.equal(new Set(shared.probes.map((probe) => probe.cookie)).size, 1);
+
+    const perVu = await runPolicy("per-vu", { vus, iterations: 2 });
+    assert.equal(perVu.logins, vus);
+    assert.equal(perVu.probes.length, vus * 2);
+    for (let vu = 1; vu <= vus; vu += 1) {
+      const vuCookies = perVu.probes.filter((probe) => probe.vu === vu).map((probe) => probe.cookie);
+      assert.equal(vuCookies.length, 2);
+      assert.equal(new Set(vuCookies).size, 1);
+    }
+    assert.equal(new Set(perVu.probes.map((probe) => probe.cookie)).size, vus);
+  });
+}

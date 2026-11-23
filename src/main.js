@@ -39,7 +39,11 @@ export const options = {
 };
 
 export function setup() {
-  return prepareSession({ http, cfg, check, recordOperation });
+  try {
+    return prepareSession({ http, cfg, check, recordOperation });
+  } catch {
+    return { ok: false, stage: "session-preparation", reason: "No se pudo preparar la sesión compartida." };
+  }
 }
 
 export function handleSummary(summary) {
@@ -47,11 +51,6 @@ export function handleSummary(summary) {
   const destination = __ENV.K6_SAFE_SUMMARY_PATH;
   if (destination) return writeSafeSummary(summary, destination);
   return { stdout: `${JSON.stringify(withoutSetupData(summary), null, 2)}\n` };
-}
-
-function errorMessage(error) {
-  if (error && typeof error.message === "string") return error.message.slice(0, 500);
-  return String(error || "Error sin detalle.").slice(0, 500);
 }
 
 export function runVoucher(setupData) {
@@ -79,7 +78,12 @@ export function runVoucher(setupData) {
   } else {
     try {
       const sessionContext = { http, cfg, check, vu, iteration, recordOperation };
-      const acquired = acquireSession(sessionContext, setupData);
+      let acquired;
+      try {
+        acquired = acquireSession(sessionContext, setupData);
+      } catch {
+        acquired = { ok: false, stage: "session", reason: "No se pudo preparar o instalar la sesión." };
+      }
       if (!acquired.ok) {
         result = { ok: false, event: {
           status: "failed-before-save",
@@ -103,8 +107,9 @@ export function runVoucher(setupData) {
         onSessionInvalidResponse: (_response, currentSession) => invalidateSession(vu, currentSession),
         }));
       }
-    } catch (error) {
-      result = { ok: false, event: { status: "failed", stage: "flow-exception", error: errorMessage(error) } };
+    } catch {
+      result = { ok: false, event: { status: "failed-before-save", stage: "flow-exception",
+        error: { name: "Error", message: "Error inesperado en el flujo; no se guardaron detalles técnicos." } } };
     }
   }
 

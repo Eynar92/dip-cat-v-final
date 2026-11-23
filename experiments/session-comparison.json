@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "profile": "session-sharing-comparison",
+  "executor": "per-vu-iterations",
+  "vus": 2,
+  "iterationsPerVu": 2,
+  "typeByIteration": [3, 1],
+  "pauseSeconds": 3,
+  "maxDuration": "10m",
+  "gracefulStop": "30s",
+  "conditions": {
+    "shared": { "scenarioCode": "SC", "authentications": 1 },
+    "independent": { "scenarioCode": "SI", "authentications": 2 }
+  }
+}

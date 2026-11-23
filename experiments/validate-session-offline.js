@@ -8,6 +8,8 @@ import path from "node:path";
 import { extractManifestEvents } from "../run.js";
 
 const basePath = "/financierodiplomado/";
+const experimentConfig = JSON.parse(readFileSync(path.resolve("experiments/session-comparison.json"), "utf8"));
+const expectedSaveCount = experimentConfig.vus * experimentConfig.iterationsPerVu;
 const accountData = {
   "1101010001": { id: "13004", name: "CAJA M/N" },
   "4102010001": { id: "13008", name: "OTROS INGRESOS" },
@@ -186,32 +188,34 @@ async function validateCondition(condition) {
     const setup = decodedSetupLine
       ? JSON.parse(decodedSetupLine.slice(decodedSetupLine.indexOf("EXPERIMENT_SETUP ") + "EXPERIMENT_SETUP ".length))
       : null;
-    const expectedLogins = condition === "shared" ? 1 : 2;
+    const expectedLogins = condition === "shared" ? 1 : experimentConfig.vus;
 
     assert.ok([0, 99].includes(result.code), `unexpected k6 exit code ${result.code}: ${result.output}`);
     assert.equal(setup?.authenticated, true, "setup preflight verified all sessions");
     assert.equal(setup?.authenticationCount, expectedLogins);
     assert.equal(setup?.sameServerSession, condition === "shared");
     assert.equal(stats.loginCount, expectedLogins, "no logins happen inside measured iterations");
-    assert.equal(stats.saveCount, 4, "one POST per VU iteration, including the ambiguous response");
-    assert.equal(new Set(stats.saves.map((save) => save.glosa)).size, 4, "no save request was retried");
-    assert.equal(events.length, 4, "one manifest event per iteration");
+    assert.equal(stats.saveCount, expectedSaveCount, "one POST per VU iteration, including the ambiguous response");
+    assert.equal(new Set(stats.saves.map((save) => save.glosa)).size, expectedSaveCount, "no save request was retried");
+    assert.equal(events.length, expectedSaveCount, "one manifest event per iteration");
     assert.equal(Object.hasOwn(summary, "setup_data"), false, "summary excludes session setup data");
     assert.equal(summary.metrics.checks.values.passes > 0, true, "summary keeps k6 checks");
     assert.equal(`${result.output}\n${JSON.stringify(summary)}`.includes("offline-session-"), false,
       "no session cookie value is printed or persisted");
-    assert.deepEqual(stats.saves.map((save) => [save.iteration, save.type]).sort((a, b) => a[0] - b[0] || a[1] - b[1]),
-      [[1, "3"], [1, "3"], [2, "1"], [2, "1"]]);
+    const expectedIterationTypes = experimentConfig.typeByIteration.flatMap((type, index) =>
+      Array.from({ length: experimentConfig.vus }, () => [index + 1, String(type)]));
+    assert.deepEqual(stats.saves.map((save) => [save.iteration, save.type]).sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1])),
+      expectedIterationTypes.sort((a, b) => a[0] - b[0] || a[1].localeCompare(b[1])));
 
     if (condition === "shared") {
       assert.equal(new Set(stats.saves.map((save) => save.sessionId)).size, 1, "both VUs sent the same server session");
     } else {
-      for (const vu of [1, 2]) {
+      for (let vu = 1; vu <= experimentConfig.vus; vu += 1) {
         assert.equal(new Set(stats.saves.filter((save) => save.vu === vu).map((save) => save.sessionId)).size, 1,
           `VU ${vu} kept its session across iterations`);
       }
-      assert.notEqual(stats.saves.find((save) => save.vu === 1)?.sessionId,
-        stats.saves.find((save) => save.vu === 2)?.sessionId, "the VUs used distinct server sessions");
+      assert.equal(new Set(stats.saves.map((save) => save.sessionId)).size, experimentConfig.vus,
+        "all VUs used distinct server sessions");
     }
     return { condition, exitCode: result.code, loginCount: stats.loginCount, saveCount: stats.saveCount,
       manifestEvents: events.length, sameServerSession: setup.sameServerSession, localMockOnly: true };

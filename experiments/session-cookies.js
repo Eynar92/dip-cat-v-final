@@ -178,34 +178,56 @@ export function jarHasIdentity(jar, baseUrl, expectedIdentity) {
   return values.includes(expectedIdentity.value);
 }
 
-export function prepareSessionPlan(condition, { login, verify }) {
+function copyPreparedSession(session) {
+  return {
+    ...session,
+    cookies: session.cookies.map((cookie) => ({ ...cookie })),
+    identity: { ...session.identity },
+  };
+}
+
+function allSameIdentity(sessions) {
+  return sessions.length > 0 && sessions.slice(1)
+    .every((session) => sameSessionIdentity(sessions[0].identity, session.identity));
+}
+
+function allDistinctIdentities(sessions) {
+  return sessions.every((session, index) => sessions.slice(index + 1)
+    .every((other) => !sameSessionIdentity(session.identity, other.identity)));
+}
+
+export function prepareSessionPlan(condition, { vus, login, verify }) {
   if (![
     "shared",
     "independent",
   ].includes(condition)) throw new Error("La condición debe ser shared o independent.");
+  if (!Number.isInteger(vus) || vus < 1) throw new Error("La cantidad de VUs debe ser un entero positivo.");
+  if (condition === "independent" && vus < 2) {
+    throw new Error("La condición independent requiere al menos 2 VUs para comprobar identidades distintas.");
+  }
 
-  const authenticationCount = condition === "shared" ? 1 : 2;
+  const authenticationCount = condition === "shared" ? 1 : vus;
   const authenticatedSessions = Array.from({ length: authenticationCount }, (_, index) => login(index + 1));
-  const sameServerSession = condition === "shared"
-    ? sameSessionIdentity(authenticatedSessions[0].identity, authenticatedSessions[0].identity)
-    : sameSessionIdentity(authenticatedSessions[0].identity, authenticatedSessions[1].identity);
-
-  if (condition === "independent" && sameServerSession) {
-    throw new Error("Los dos logins no produjeron identidades de sesión distintas; no se crean registros.");
+  if (authenticatedSessions.some((session) => !session?.identity)) {
+    throw new Error("No se pudo identificar la sesión autenticada de cada VU; no se crean registros.");
   }
 
   const vuSessions = condition === "shared"
-    ? [authenticatedSessions[0], authenticatedSessions[0]]
+    ? Array.from({ length: vus }, () => copyPreparedSession(authenticatedSessions[0]))
     : authenticatedSessions;
+  if (condition === "independent" && !allDistinctIdentities(vuSessions)) {
+    throw new Error("Los logins no produjeron identidades de sesión distintas para todos los VUs; no se crean registros.");
+  }
+
   const authenticated = vuSessions.every((session, index) => verify(session, index + 1));
   if (!authenticated) throw new Error("El preflight no confirmó todas las sesiones; no se crean registros.");
 
-  const finalSameServerSession = sameSessionIdentity(vuSessions[0].identity, vuSessions[1].identity);
+  const finalSameServerSession = allSameIdentity(vuSessions);
   if (condition === "shared" && !finalSameServerSession) {
     throw new Error("La identidad de sesión compartida cambió durante el preflight; no se crean registros.");
   }
-  if (condition === "independent" && finalSameServerSession) {
-    throw new Error("Las sesiones independientes convergieron durante el preflight; no se crean registros.");
+  if (condition === "independent" && !allDistinctIdentities(vuSessions)) {
+    throw new Error("Las sesiones independientes no se mantuvieron distintas durante el preflight; no se crean registros.");
   }
 
   return { authenticationCount, authenticated, sameServerSession: finalSameServerSession, vuSessions };

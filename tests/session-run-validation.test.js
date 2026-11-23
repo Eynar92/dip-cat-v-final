@@ -56,6 +56,14 @@ test("accepts a complete measured run and a complete matching verification", () 
   assert.equal(check().ok, true);
 });
 
+test("cloud does not require a local measured summary but still requires complete verification", () => {
+  assert.equal(check({ requireMeasuredSummary: false, summaryAvailable: false }).ok, true);
+  assert.equal(check({ requireMeasuredSummary: false, summaryAvailable: false, verificationEvents: [] }).ok, false);
+  assert.equal(check({ requireMeasuredSummary: false, summaryAvailable: false, verifierExitCode: 1 }).ok, false);
+  assert.equal(check({ requireMeasuredSummary: false, summaryAvailable: false, verificationSummaryAvailable: false }).ok, false);
+  assert.equal(check({ summaryAvailable: false }).ok, false);
+});
+
 test("fails when the verifier exits nonzero and emits no events", () => {
   const result = check({ verifierExitCode: 1, verificationEvents: [] });
   assert.equal(result.ok, false);

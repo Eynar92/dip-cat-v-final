@@ -12,11 +12,37 @@ const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const experimentDir = path.dirname(fileURLToPath(import.meta.url));
 const configPath = path.join(experimentDir, "session-comparison.json");
 
-function conditionFromArgs(args) {
-  if (args.length !== 2 || args[0] !== "--condition" || !["shared", "independent"].includes(args[1])) {
-    throw new Error("Uso: node experiments/run-session-comparison.js --condition <shared|independent>");
+export function parseExperimentArgs(args) {
+  const options = { mode: "local", condition: null, dryRun: false };
+  const seen = new Set();
+  for (let index = 0; index < args.length; index += 1) {
+    const flag = args[index];
+    if (seen.has(flag)) throw new Error(`Argumento repetido: ${flag}.`);
+    seen.add(flag);
+    if (flag === "--dry-run") { options.dryRun = true; continue; }
+    if (!["--condition", "--mode"].includes(flag) || !args[index + 1] || args[index + 1].startsWith("--")) {
+      throw new Error("Uso: npm run experiment:session -- --condition <shared|independent> [--mode local|cloud] [--dry-run]");
+    }
+    options[flag === "--condition" ? "condition" : "mode"] = args[++index];
   }
-  return args[1];
+  if (!["shared", "independent"].includes(options.condition)) throw new Error("Selecciona --condition shared o independent.");
+  if (!["local", "cloud"].includes(options.mode)) throw new Error("Selecciona --mode local o cloud.");
+  return options;
+}
+
+export function buildExperimentInvocation({ mode, environment, scriptPath, summaryPath }) {
+  if (mode === "local") {
+    return { args: ["run", scriptPath], environment: { ...environment, EXPERIMENT_SUMMARY_PATH: summaryPath } };
+  }
+  if (mode !== "cloud") throw new Error("Modalidad del experimento no admitida.");
+  const args = ["cloud", "run", "--show-logs"];
+  const forwarded = ["FINANCIERO_USER", "FINANCIERO_PASSWORD", "FINANCIERO_BASE_URL",
+    "EXECUTION_MODE", "TEST_NAME", "RUN_ID", "EXPERIMENT_CONDITION", "K6_CLOUD_PROJECT_ID"];
+  for (const key of forwarded) {
+    if (environment[key]) args.push("--env", `${key}=${environment[key]}`);
+  }
+  args.push(scriptPath);
+  return { args, environment: { ...environment } };
 }
 
 function valueRequired(name, value) {
@@ -38,7 +64,8 @@ function safeLine(line, environment) {
 function runK6(args, environment, logPath) {
   return new Promise((resolve) => {
     const output = [];
-    const child = spawn("k6", args, { cwd: rootDir, env: environment, shell: false, windowsHide: true });
+    const child = spawn(environment.K6_BIN || "k6", args, { cwd: rootDir, env: environment, shell: false, windowsHide: true });
+    let startError = null;
     const consume = (stream, prefix = "") => {
       const lines = createInterface({ input: stream });
       lines.on("line", (line) => {
@@ -49,16 +76,15 @@ function runK6(args, environment, logPath) {
     };
     consume(child.stdout);
     consume(child.stderr);
-    child.once("error", async (error) => {
+    child.once("error", (error) => {
+      startError = error;
       const safe = `No se pudo iniciar k6: ${safeLine(error.message, environment)}`;
       output.push(safe);
       console.error(safe);
-      await writeFile(logPath, `${output.join("\n")}\n`, { flag: "wx" });
-      resolve({ exitCode: 127, output });
     });
     child.once("close", async (code, signal) => {
       await writeFile(logPath, `${output.join("\n")}\n`, { flag: "wx" });
-      resolve({ exitCode: code ?? (signal ? 128 : 1), output });
+      resolve({ exitCode: startError ? 127 : code ?? (signal ? 128 : 1), output });
     });
   });
 }
@@ -113,7 +139,7 @@ function readGitMetadata() {
 }
 
 async function main() {
-  const condition = conditionFromArgs(process.argv.slice(2));
+  const { condition, mode, dryRun } = parseExperimentArgs(process.argv.slice(2));
   const experiment = JSON.parse(await readFile(configPath, "utf8"));
   const environmentFile = await readFile(path.join(rootDir, ".env"), "utf8");
   const dotenvValues = parseEnvFile(environmentFile);
@@ -125,6 +151,21 @@ async function main() {
   const parsedBaseUrl = new URL(baseUrl);
   if (!["http:", "https:"].includes(parsedBaseUrl.protocol) || parsedBaseUrl.username || parsedBaseUrl.password) {
     throw new Error("FINANCIERO_BASE_URL debe ser HTTP/HTTPS y no debe contener credenciales.");
+  }
+  if (mode === "cloud") {
+    valueRequired("K6_CLOUD_TOKEN", environment.K6_CLOUD_TOKEN);
+    valueRequired("K6_CLOUD_STACK_ID", environment.K6_CLOUD_STACK_ID);
+    const project = environment.K6_CLOUD_PROJECT_ID;
+    if (project && !/^\d+$/.test(project)) throw new Error("K6_CLOUD_PROJECT_ID debe ser numérico u omitirse.");
+    if (!experiment.cloud?.loadZone) throw new Error("Falta cloud.loadZone en la configuración del experimento.");
+  }
+  if (dryRun) {
+    console.log(JSON.stringify({ dryRun: true, mode, condition, vus: experiment.vus,
+      iterationsPerVu: experiment.iterationsPerVu, maximumAttempts: experiment.vus * experiment.iterationsPerVu,
+      setupAuthenticationsExpected: condition === "shared" ? 1 : experiment.vus,
+      cloudLoadZone: mode === "cloud" ? experiment.cloud.loadZone : null,
+      postVerificationMode: "local-read-only", executed: false }, null, 2));
+    return 0;
   }
 
   const runId = generateRunId(new Date());
@@ -145,8 +186,12 @@ async function main() {
     pauseSeconds: experiment.pauseSeconds,
     maxDuration: experiment.maxDuration,
     gracefulStop: experiment.gracefulStop,
-    setupAuthenticationsExpected: conditionDetails.authentications,
-    mode: "local",
+    setupAuthenticationsExpected: condition === "shared" ? 1 : experiment.vus,
+    mode,
+    cloud: mode === "cloud" ? experiment.cloud : null,
+    projectId: mode === "cloud" ? environment.K6_CLOUD_PROJECT_ID || null : null,
+    requestTimeout: envConfig.requestTimeout,
+    thresholds: JSON.parse(await readFile(path.join(rootDir, "config/tests.json"), "utf8")).tests["concurrency-validation"].thresholds,
     baseUrl,
     expectedContext: envConfig.expectedContext,
     sessionPolicyDefault: envConfig.sessionPolicy || "per-iteration",
@@ -157,7 +202,7 @@ async function main() {
     FINANCIERO_USER: user,
     FINANCIERO_PASSWORD: password,
     FINANCIERO_BASE_URL: baseUrl,
-    EXECUTION_MODE: "local",
+    EXECUTION_MODE: mode,
     TEST_NAME: "concurrency-validation",
     RUN_ID: runId,
     EXPERIMENT_CONDITION: condition,
@@ -166,6 +211,7 @@ async function main() {
   await writeFile(results("run-metadata.json"), `${JSON.stringify({
     runId,
     condition,
+    mode,
     startedAtUtc: startedAt.toISOString(),
     timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     ...git,
@@ -175,16 +221,28 @@ async function main() {
   console.log(`RUN_ID: ${runId}`);
   console.log(`Resultados: ${resultDir}`);
   console.log(`Intentos máximos: ${experiment.vus * experiment.iterationsPerVu}`);
+  console.log(`Generación de carga: ${mode === "cloud" ? "Grafana Cloud" : "equipo local"}`);
+  console.log("La verificación posterior será de solo lectura desde este equipo.");
 
   const scriptPath = path.join(experimentDir, "session-comparison.js");
-  const measured = await runK6(["run", scriptPath], {
-    ...childEnvironment,
-    EXPERIMENT_SUMMARY_PATH: results("summary.json"),
-  }, results("console.log"));
+  const invocation = buildExperimentInvocation({ mode, environment: childEnvironment,
+    scriptPath, summaryPath: results("summary.json") });
+  const measured = await runK6(invocation.args, invocation.environment, results("console.log"));
+  if (mode === "cloud") {
+    await writeFile(results("summary-status.json"), `${JSON.stringify({
+      source: "Grafana Cloud", localSummaryExpected: false, csvDownload: "manual",
+      reason: "Las estadísticas de la carga se consultan en Grafana. La consola y el manifiesto no sustituyen la exportación remota.",
+    }, null, 2)}\n`, { flag: "wx" });
+    console.log("Descarga manual: abre la corrida en Grafana y selecciona Export data en el menú de resultados.");
+  }
   const events = extractManifestEvents(measured.output.join("\n"));
   await writeFile(results("manifest.ndjson"), events.map((event) => JSON.stringify(event)).join("\n") +
     (events.length ? "\n" : ""), { flag: "wx" });
-  await writeFile(results("save-overlap.json"), `${JSON.stringify(findOverlappingSaves(events), null, 2)}\n`, { flag: "wx" });
+  await writeFile(results("save-overlap.json"), `${JSON.stringify({ ...findOverlappingSaves(events),
+    interpretation: mode === "cloud"
+      ? "Intervalos del cliente remoto; si hay varios generadores, su comparación depende de la sincronización de sus relojes. No demuestra ejecución simultánea en el servidor."
+      : "Intervalos del cliente local. No demuestra ejecución simultánea en el servidor.",
+  }, null, 2)}\n`, { flag: "wx" });
 
   let verification = { attempted: false, exitCode: null, authEvents: [], records: [] };
   const recordsToVerify = events.filter((event) => event.id).map((event) => ({
@@ -205,6 +263,7 @@ async function main() {
     await writeFile(results("verification-input.json"), `${JSON.stringify(recordsToVerify, null, 2)}\n`, { flag: "wx" });
     const verificationEnvironment = {
       ...childEnvironment,
+      EXECUTION_MODE: "local",
       EXPERIMENT_VERIFY_INPUT: `../results/${runId}/verification-input.json`,
     };
     const verifier = await runK6(["run", path.join(experimentDir, "verify-session-records.js")], {
@@ -236,6 +295,7 @@ async function main() {
     verifierAuthEvents: verification.authEvents,
     verificationEvents: verification.records,
     summaryAvailable: existsSync(results("summary.json")),
+    requireMeasuredSummary: mode !== "cloud",
     verificationSummaryAvailable: !verification.attempted || existsSync(results("verification-summary.json")),
     vus: experiment.vus,
     iterationsPerVu: experiment.iterationsPerVu,
@@ -248,6 +308,8 @@ async function main() {
   await writeFile(results("experiment-result.json"), `${JSON.stringify({
     runId,
     condition,
+    mode,
+    remoteMetricsReviewRequired: mode === "cloud",
     startedAtUtc: startedAt.toISOString(),
     finishedAtUtc: finishedAt.toISOString(),
     measuredExitCode: measured.exitCode,
@@ -259,7 +321,9 @@ async function main() {
   return exitCode;
 }
 
-main().then((exitCode) => { process.exitCode = exitCode; }).catch((error) => {
-  console.error(error.message);
-  process.exitCode = 1;
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().then((exitCode) => { process.exitCode = exitCode; }).catch((error) => {
+    console.error(error.message);
+    process.exitCode = 1;
+  });
+}

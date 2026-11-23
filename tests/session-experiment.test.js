@@ -25,6 +25,7 @@ test("shared condition authenticates once and assigns the same identity to both 
   let logins = 0;
   const preflights = [];
   const plan = prepareSessionPlan("shared", {
+    vus: 2,
     login: () => { logins += 1; return { cookies: [sessionCookie("sid-shared")], identity: sessionCookie("sid-shared") }; },
     verify: (session, vu) => { preflights.push({ session, vu }); return true; },
   });
@@ -41,6 +42,7 @@ test("independent condition authenticates twice and rejects a reused server iden
   let logins = 0;
   let verifications = 0;
   assert.throws(() => prepareSessionPlan("independent", {
+    vus: 2,
     login: () => { logins += 1; return { cookies: [sessionCookie("same-sid")], identity: sessionCookie("same-sid") }; },
     verify: () => { verifications += 1; return true; },
   }), /identidades de sesión distintas/);
@@ -52,6 +54,7 @@ test("independent condition verifies both sessions after both logins", () => {
   let logins = 0;
   let verifications = 0;
   const plan = prepareSessionPlan("independent", {
+    vus: 2,
     login: () => { logins += 1; return { cookies: [sessionCookie(`sid-${logins}`)], identity: sessionCookie(`sid-${logins}`) }; },
     verify: () => { verifications += 1; return true; },
   });
@@ -66,11 +69,83 @@ test("preflight failure aborts the plan before iteration work can start", () => 
   let logins = 0;
   let verifications = 0;
   assert.throws(() => prepareSessionPlan("shared", {
+    vus: 2,
     login: () => { logins += 1; return { cookies: [sessionCookie("sid")], identity: sessionCookie("sid") }; },
     verify: () => { verifications += 1; return verifications === 1; },
   }), /no se crean registros/);
   assert.equal(logins, 1);
   assert.equal(verifications, 2);
+});
+
+for (const vus of [5, 10]) {
+  test(`shared session authenticates once and assigns the same identity to ${vus} VUs`, () => {
+    let logins = 0;
+    const preflightVus = [];
+    const plan = prepareSessionPlan("shared", {
+      vus,
+      login: () => {
+        logins += 1;
+        const identity = sessionCookie("shared-session");
+        return { cookies: [identity], identity };
+      },
+      verify: (session, vu) => {
+        preflightVus.push(vu);
+        return session.identity.value === "shared-session";
+      },
+    });
+
+    assert.equal(logins, 1);
+    assert.equal(plan.authenticationCount, 1);
+    assert.equal(plan.vuSessions.length, vus);
+    assert.equal(preflightVus.length, vus);
+    assert.deepEqual(preflightVus, Array.from({ length: vus }, (_, index) => index + 1));
+    assert.equal(plan.vuSessions.every((session) => sameSessionIdentity(session.identity, plan.vuSessions[0].identity)), true);
+    assert.equal(new Set(plan.vuSessions).size, vus, "each VU receives its own session container");
+    assert.equal(plan.sameServerSession, true);
+  });
+
+  test(`independent condition authenticates and preflights ${vus} distinct VU sessions`, () => {
+    let logins = 0;
+    const preflightVus = [];
+    const plan = prepareSessionPlan("independent", {
+      vus,
+      login: (vu) => {
+        logins += 1;
+        const identity = sessionCookie(`session-${vu}`);
+        return { cookies: [identity], identity };
+      },
+      verify: (session, vu) => {
+        preflightVus.push(vu);
+        return session.identity.value === `session-${vu}`;
+      },
+    });
+    const identities = plan.vuSessions.map(({ identity }) => identity.value);
+
+    assert.equal(logins, vus);
+    assert.equal(plan.authenticationCount, vus);
+    assert.equal(plan.vuSessions.length, vus);
+    assert.deepEqual(preflightVus, Array.from({ length: vus }, (_, index) => index + 1));
+    assert.equal(new Set(identities).size, vus);
+    assert.equal(plan.sameServerSession, false);
+  });
+}
+
+test("session plan rejects invalid VU counts and a one-VU independent comparison", () => {
+  assert.throws(() => prepareSessionPlan("shared", { vus: 0, login() {}, verify() {} }), /entero positivo/);
+  assert.throws(() => prepareSessionPlan("independent", { vus: 1, login() {}, verify() {} }), /al menos 2 VUs/);
+});
+
+test("independent condition rejects a repeated identity between non-adjacent VUs", () => {
+  let verifications = 0;
+  assert.throws(() => prepareSessionPlan("independent", {
+    vus: 5,
+    login: (vu) => {
+      const identity = sessionCookie(vu === 5 ? "session-1" : `session-${vu}`);
+      return { cookies: [identity], identity };
+    },
+    verify: () => { verifications += 1; return true; },
+  }), /identidades de sesión distintas para todos los VUs/);
+  assert.equal(verifications, 0);
 });
 
 test("captures and restores cookies with domain, path and security attributes", () => {

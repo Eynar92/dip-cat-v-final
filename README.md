@@ -81,7 +81,13 @@ Se evalúa el registro de un comprobante contable completo, desde el acceso al s
 6. Consultar el registro para comparar tipo, fecha, glosas, cuentas, líneas e importes y recuperar el correlativo final.
 7. Descargar el PDF y comprobar el estado de respuesta, el tipo de archivo y su firma.
 
-Por defecto, cada iteración realiza una autenticación nueva. Los VUs utilizan sus propios almacenes de cookies y pueden ingresar con la misma cuenta configurada. La política de sesión se declara en `config/environment.json`; cualquier alternativa debe verificarse antes de utilizarla en una prueba formal.
+### Autenticación y sesiones
+
+Actualmente `config/environment.json` utiliza `sessionPolicy: "per-iteration"`: cada VU inicia sesión antes de cada comprobante. Los VUs usan la misma cuenta configurada, pero cada uno mantiene su propio almacén de cookies; no comparten una sesión. La autenticación genera carga adicional y sus peticiones forman parte de las métricas HTTP generales. El tiempo `voucher_flow_duration` también incluye la autenticación cuando se realiza.
+
+Para representar usuarios que permanecen dentro del sistema, el comportamiento previsto es autenticar una vez por VU y reutilizar su sesión en los siguientes comprobantes. Esa modalidad todavía no está lista para utilizarse en las pruebas formales. Existe una rama `per-vu` en el código que conserva el estado de autenticación, pero el script no configura la conservación de cookies entre iteraciones. k6 las reinicia por defecto, de modo que mantener la marca de autenticado no garantiza conservar una sesión válida.
+
+Antes de activar `per-vu`, se debe completar el manejo de cookies y verificar varias iteraciones por VU, primero con smoke y después con concurrencia mínima. Cambiar únicamente el JSON no resuelve ese punto. También se debe definir si el tiempo del flujo de comprobantes incluirá el login inicial o si se medirá por separado. La opción [`noCookiesReset` de k6](https://grafana.com/docs/k6/latest/using-k6/k6-options/reference/#no-cookies-reset) permite conservar las cookies entre iteraciones; cada VU sigue teniendo su propio almacén.
 
 Se utiliza k6 HTTP: las acciones se reproducen mediante peticiones al servidor. No se controla la interfaz del navegador ni se ejecuta el JavaScript recibido en las respuestas; las consultas posteriores al guardado se realizan explícitamente.
 

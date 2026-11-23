@@ -6,6 +6,8 @@ Comparar dos condiciones con la misma carga pequeña para observar el comportami
 
 Cada condición usa 2 VUs y 2 iteraciones por VU (4 iteraciones totales), sin ramp-up. Cada VU procesa los tipos 3 y 1, en ese orden. Hay una pausa de 3 segundos entre iteraciones. El máximo es de 4 comprobantes por condición y 8 en las dos condiciones combinadas. La creación no tiene reintentos automáticos.
 
+La preparación de sesiones toma el total de VUs del perfil: la condición compartida hace una autenticación y asigna copias de esa identidad a todos los VUs; la independiente hace una autenticación por VU y exige identidades distintas. Antes de ejecutar el flujo, ambas condiciones verifican las sesiones de cada VU.
+
 El comando es `npm run experiment:session -- --condition shared` o `npm run experiment:session -- --condition independent` desde la raíz del repositorio. El runner necesita `FINANCIERO_USER`, `FINANCIERO_PASSWORD` y `FINANCIERO_BASE_URL` en `.env`.
 
 ## Validación de cuentas persistidas
@@ -14,7 +16,30 @@ El parser identifica la fila a partir de `filaActiva` y valida el ID de cuenta e
 
 La respuesta editable real contiene, por ejemplo, `filaActiva=1; setBusquedaCuentaEdit('13004','1101010001','CAJA M/N','0','')`; la segunda línea cambia a `filaActiva=2` antes de su llamada. La función usa `var fila=filaActiva`, asigna `codigoCuenta` a `cuenta${fila}` y `codigoCuentaAux` a `cuenta_auxiliar${fila}`. La firma y la asignación a fila también se confirmaron en el JavaScript sanitizado de la grabación. La validación compara ID, número y nombre esperados para esa fila. Rechaza filas ausentes, duplicadas o con una firma no reconocida, sin depender solo del orden de las llamadas. Las comprobaciones existentes de glosas, importes y totales siguen activas.
 
-## Resultados
+## Ejecución local y cloud
+
+El experimento admite `--mode local` (predeterminado) y `--mode cloud`. En ambos casos conserva VUs, iteraciones, tipos, pausas y timeout. La política predeterminada del flujo habitual sigue sin cambios.
+
+Desde la raíz del repositorio:
+
+```powershell
+npm run experiment:session -- --condition shared --mode cloud --dry-run
+npm run experiment:session -- --condition shared --mode cloud
+```
+
+`--dry-run` revisa la configuración y muestra el plan sin ejecutar k6, autenticar ni crear comprobantes. La ejecución real requiere usuario y contraseña del sistema, `K6_CLOUD_TOKEN` y `K6_CLOUD_STACK_ID` en `.env`. `K6_CLOUD_PROJECT_ID` es opcional y debe ser numérico; si no se usa, se omite. Se utiliza el acceso a Grafana configurado para el proyecto, sin imprimir los secretos.
+
+En cloud se ejecuta `experiments/session-comparison.js`, no `src/main.js`. La autenticación de preparación y la creación ocurren en los generadores remotos. `cloud.loadZone` en `experiments/session-comparison.json` selecciona una sola zona (inicialmente Ashburn). La región cambia las condiciones respecto de local y debe constar en el informe.
+
+El lanzador conserva configuración, consola y los eventos recibidos. Si faltan eventos, falla la validación; no vuelve a crear comprobantes para completar la evidencia. La verificación posterior consulta desde el equipo local los IDs recibidos, con una autenticación adicional de solo lectura. Un fallo de esta consulta puede depender de la conexión local y debe distinguirse del resultado remoto de creación.
+
+El resumen de la carga cloud se consulta en Grafana. No se exporta `setup_data`, no se envían rutas locales de resumen al generador remoto y no se exige `summary.json` local para cloud. `summary-status.json` registra esta diferencia. Los requisitos de cobertura del manifiesto, código de salida y verificación posterior siguen vigentes. Los intervalos de guardado de distintos generadores requieren cautela por la sincronización de sus relojes.
+
+Al terminar, abrir el enlace de corrida mostrado en consola o buscar `session-shared-<RUN_ID>` en el proyecto de Grafana. En el menú de resultados seleccionar **Export data**, confirmar y descargar el ZIP cuando esté listo. Si ya fue exportado, seleccionar **Download export data**. Guardarlo manualmente en `results/<RUN_ID>/cloud-export.zip`; el lanzador no lo descarga. Revisar métricas y thresholds remotos además de los archivos locales.
+
+Referencias: [variables de entorno](https://grafana.com/docs/k6/latest/using-k6/environment-variables/), [opciones cloud](https://grafana.com/docs/grafana-cloud/observe-and-act/testing/k6/author-run/cloud-scripting-extras/cloud-options/) y [exportación de CSV](https://grafana.com/docs/grafana-cloud/observe-and-act/testing/k6/analyze-results/export-results/).
+
+## Resultados originales de 2 VUs
 
 | Condición | RUN_ID | Autenticaciones setup | Sesiones server-side | Iteraciones | Registros creados y verificados | Guardados solapados |
 | --- | --- | ---: | --- | ---: | ---: | --- |

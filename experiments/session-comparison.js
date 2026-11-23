@@ -38,9 +38,15 @@ export const options = {
   thresholds: testConfig.thresholds,
   noCookiesReset: true,
   userAgent: "dip-cat-v-final/session-experiment",
+  ...(cfg.mode === "cloud" ? { cloud: {
+    name: `session-${condition}-${cfg.runId}`,
+    ...(__ENV.K6_CLOUD_PROJECT_ID ? { projectID: Number(__ENV.K6_CLOUD_PROJECT_ID) } : {}),
+    distribution: { experiment: { loadZone: experimentConfig.cloud.loadZone, percent: 100 } },
+  } } : {}),
 };
 
 export function handleSummary(data) {
+  if (cfg.mode === "cloud") return {};
   return writeSessionSummary(data);
 }
 
@@ -79,11 +85,13 @@ function verifyPreparedSession(preparedSession) {
 
 export function setup() {
   const plan = prepareSessionPlan(condition, {
+    vus: experimentConfig.vus,
     login: () => loginSession(),
     verify: (_session, _vu) => verifyPreparedSession(_session),
   });
   console.log(`EXPERIMENT_SETUP ${JSON.stringify({
     condition,
+    vus: plan.vuSessions.length,
     authenticationCount: plan.authenticationCount,
     authenticated: plan.authenticated,
     sameServerSession: plan.sameServerSession,

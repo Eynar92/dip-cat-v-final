@@ -13,6 +13,7 @@ export function validateSessionRun({
   manifestEvents,
   verificationAttempted,
   summaryAvailable = true,
+  requireMeasuredSummary = true,
   verificationSummaryAvailable = true,
   verifierExitCode,
   verifierAuthEvents,
@@ -31,7 +32,7 @@ export function validateSessionRun({
   const eventsToVerify = [];
 
   if (measuredExitCode !== 0) errors.push(`La ejecución medida terminó con código ${measuredExitCode}.`);
-  if (!summaryAvailable) errors.push("No se escribió el resumen estadístico seguro de la ejecución medida.");
+  if (requireMeasuredSummary && !summaryAvailable) errors.push("No se escribió el resumen estadístico seguro de la ejecución medida.");
   if (attempts.length !== expectedCount) {
     errors.push(`Manifiesto incompleto: se esperaban ${expectedCount} eventos y llegaron ${attempts.length}.`);
   }

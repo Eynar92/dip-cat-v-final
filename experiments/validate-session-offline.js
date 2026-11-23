@@ -189,12 +189,13 @@ async function validateCondition(condition) {
       ? JSON.parse(decodedSetupLine.slice(decodedSetupLine.indexOf("EXPERIMENT_SETUP ") + "EXPERIMENT_SETUP ".length))
       : null;
     const expectedLogins = condition === "shared" ? 1 : experimentConfig.vus;
+    const expectedSetupLogins = condition === "shared" ? 1 : 0;
 
     assert.ok([0, 99].includes(result.code), `unexpected k6 exit code ${result.code}: ${result.output}`);
-    assert.equal(setup?.authenticated, true, "setup preflight verified all sessions");
-    assert.equal(setup?.authenticationCount, expectedLogins);
-    assert.equal(setup?.sameServerSession, condition === "shared");
-    assert.equal(stats.loginCount, expectedLogins, "no logins happen inside measured iterations");
+    assert.equal(setup?.prepared, true, "setup preparation completed without persisting session data");
+    assert.equal(setup?.authenticationCount, expectedSetupLogins);
+    assert.equal(setup?.sameServerSession, condition === "shared" ? true : null);
+    assert.equal(stats.loginCount, expectedLogins, "authentication count matches the selected policy");
     assert.equal(stats.saveCount, expectedSaveCount, "one POST per VU iteration, including the ambiguous response");
     assert.equal(new Set(stats.saves.map((save) => save.glosa)).size, expectedSaveCount, "no save request was retried");
     assert.equal(events.length, expectedSaveCount, "one manifest event per iteration");

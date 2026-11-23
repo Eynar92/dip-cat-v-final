@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractManifestEvents, generateRunId, parseEnvFile, reserveRunDirectory } from "../run.js";
 import { validateSessionRun } from "./session-run-validation.js";
+import { sessionPolicyForCondition, validateSessionComparisonProfile } from "./session-condition.js";
 
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const experimentDir = path.dirname(fileURLToPath(import.meta.url));
@@ -140,7 +141,8 @@ function readGitMetadata() {
 
 async function main() {
   const { condition, mode, dryRun } = parseExperimentArgs(process.argv.slice(2));
-  const experiment = JSON.parse(await readFile(configPath, "utf8"));
+  const sessionPolicy = sessionPolicyForCondition(condition);
+  const experiment = validateSessionComparisonProfile(JSON.parse(await readFile(configPath, "utf8")));
   const environmentFile = await readFile(path.join(rootDir, ".env"), "utf8");
   const dotenvValues = parseEnvFile(environmentFile);
   const environment = { ...dotenvValues, ...process.env };
@@ -162,7 +164,9 @@ async function main() {
   if (dryRun) {
     console.log(JSON.stringify({ dryRun: true, mode, condition, vus: experiment.vus,
       iterationsPerVu: experiment.iterationsPerVu, maximumAttempts: experiment.vus * experiment.iterationsPerVu,
-      setupAuthenticationsExpected: condition === "shared" ? 1 : experiment.vus,
+      sessionPolicy,
+      setupAuthenticationsExpected: sessionPolicy === "shared" ? 1 : 0,
+      totalAuthenticationsExpected: sessionPolicy === "shared" ? 1 : experiment.vus,
       cloudLoadZone: mode === "cloud" ? experiment.cloud.loadZone : null,
       postVerificationMode: "local-read-only", executed: false }, null, 2));
     return 0;
@@ -186,7 +190,8 @@ async function main() {
     pauseSeconds: experiment.pauseSeconds,
     maxDuration: experiment.maxDuration,
     gracefulStop: experiment.gracefulStop,
-    setupAuthenticationsExpected: condition === "shared" ? 1 : experiment.vus,
+    setupAuthenticationsExpected: sessionPolicy === "shared" ? 1 : 0,
+    totalAuthenticationsExpected: sessionPolicy === "shared" ? 1 : experiment.vus,
     mode,
     cloud: mode === "cloud" ? experiment.cloud : null,
     projectId: mode === "cloud" ? environment.K6_CLOUD_PROJECT_ID || null : null,
@@ -194,7 +199,8 @@ async function main() {
     thresholds: JSON.parse(await readFile(path.join(rootDir, "config/tests.json"), "utf8")).tests["concurrency-validation"].thresholds,
     baseUrl,
     expectedContext: envConfig.expectedContext,
-    sessionPolicyDefault: envConfig.sessionPolicy || "per-iteration",
+    sessionPolicyDefault: envConfig.sessionPolicy || "shared",
+    sessionPolicyUnderTest: sessionPolicy,
     noCookiesReset: true,
   };
   const childEnvironment = {

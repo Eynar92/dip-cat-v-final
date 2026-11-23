@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -45,6 +47,22 @@ test("test catalog validates all six named tests and explicit executor settings"
     if (scenario.stages) {
       assert.ok(scenario.stages.every((stage) => !("phase" in stage)), "k6 recibe solo duration/target por etapa");
     }
+  }
+});
+
+test("k6 inspects all six profiles without starting an execution", () => {
+  const catalog = JSON.parse(readFileSync("config/tests.json", "utf8"));
+  for (const name of names) {
+    const result = spawnSync("k6", ["inspect", "--env", "FINANCIERO_USER=offline-user",
+      "--env", "FINANCIERO_PASSWORD=offline-password", "--env", "EXECUTION_MODE=local",
+      "--env", `TEST_NAME=${name}`, "--env", "RUN_ID=offline123",
+      "src/main.js"], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+    const options = JSON.parse(result.stdout);
+    const profile = catalog.tests[name];
+    assert.equal(options.scenarios.comprobantes.executor, profile.executor);
+    assert.equal(options.thresholds.voucher_business_success[0], "rate==1");
+    assert.equal(options.noCookiesReset, true, "la política shared predeterminada conserva la sesión del VU");
   }
 });
 

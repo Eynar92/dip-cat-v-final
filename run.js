@@ -9,6 +9,22 @@ import { validateTestCatalog } from "./config/test-config.js";
 
 const rootDir = path.dirname(fileURLToPath(import.meta.url));
 const modes = ["local", "hybrid", "cloud"];
+const sessionPolicies = ["per-iteration", "per-vu", "shared"];
+
+export function resolveSessionPolicy(value) {
+  const policy = value || "shared";
+  if (!sessionPolicies.includes(policy)) {
+    throw new Error(`sessionPolicy inválida; usa ${sessionPolicies.join(", ")}.`);
+  }
+  return policy;
+}
+
+export function validateCloudLoadZone(value) {
+  if (value !== undefined && (typeof value !== "string" || !/^[a-z0-9_-]+:[a-z0-9_-]+:[a-z0-9_-]+$/i.test(value))) {
+    throw new Error("cloud.loadZone debe tener formato proveedor:región:zona.");
+  }
+  return value;
+}
 
 export function parseArgs(args) {
   const options = { mode: null, testName: null, runId: null, help: false };
@@ -60,15 +76,21 @@ export function parseEnvFile(content) {
   return values;
 }
 
-export function buildChildEnvironment({ parentEnvironment = process.env, dotenvValues = {}, mode, testName, runId, baseUrl }) {
+export function buildChildEnvironment({ parentEnvironment = process.env, dotenvValues = {}, mode, testName, runId, baseUrl,
+  cloudLoadZone, safeSummaryPath }) {
   const source = { ...dotenvValues, ...parentEnvironment };
-  return {
+  const childEnvironment = {
     ...source,
     EXECUTION_MODE: mode,
     TEST_NAME: testName,
     RUN_ID: runId,
     FINANCIERO_BASE_URL: source.FINANCIERO_BASE_URL || baseUrl,
   };
+  if (mode === "cloud") childEnvironment.K6_CLOUD_LOAD_ZONE = cloudLoadZone;
+  else delete childEnvironment.K6_CLOUD_LOAD_ZONE;
+  if (mode === "cloud") delete childEnvironment.K6_SAFE_SUMMARY_PATH;
+  else childEnvironment.K6_SAFE_SUMMARY_PATH = safeSummaryPath;
+  return childEnvironment;
 }
 
 export function buildK6Invocation({ mode, testName, runId, environment, resultDir, k6Bin = "k6" }) {
@@ -77,9 +99,9 @@ export function buildK6Invocation({ mode, testName, runId, environment, resultDi
   const args = [];
 
   if (mode === "local") {
-    args.push("run", "--summary-export", summaryPath, scriptPath);
+    args.push("run", scriptPath);
   } else if (mode === "hybrid") {
-    args.push("cloud", "run", "--local-execution", "--summary-export", summaryPath, scriptPath);
+    args.push("cloud", "run", "--local-execution", scriptPath);
   } else if (mode === "cloud") {
     args.push("cloud", "run", "--show-logs");
     const forwarded = [
@@ -90,6 +112,7 @@ export function buildK6Invocation({ mode, testName, runId, environment, resultDi
       ["TEST_NAME", testName],
       ["RUN_ID", runId],
     ];
+    if (environment.K6_CLOUD_LOAD_ZONE) forwarded.push(["K6_CLOUD_LOAD_ZONE", environment.K6_CLOUD_LOAD_ZONE]);
     for (const [name, value] of forwarded) args.push("--env", `${name}=${value}`);
     args.push(scriptPath);
   } else {
@@ -165,7 +188,13 @@ async function readConfiguration(environment) {
   if (!["http:", "https:"].includes(parsedUrl.protocol) || parsedUrl.username || parsedUrl.password) {
     throw new Error("FINANCIERO_BASE_URL debe ser HTTP/HTTPS y no puede contener credenciales en la URL.");
   }
-  return { testCatalog, environmentConfig, baseUrl: baseUrl.replace(/\/$/, "") };
+  const sessionPolicy = resolveSessionPolicy(environmentConfig.sessionPolicy);
+  const loadZone = validateCloudLoadZone(environmentConfig.cloud?.loadZone);
+  return {
+    testCatalog,
+    environmentConfig: { ...environmentConfig, sessionPolicy },
+    baseUrl: baseUrl.replace(/\/$/, ""),
+  };
 }
 
 function printHelp() {
@@ -262,6 +291,9 @@ export async function main(args = process.argv.slice(2)) {
     requireValue("K6_CLOUD_TOKEN", environment.K6_CLOUD_TOKEN);
     requireValue("K6_CLOUD_STACK_ID", environment.K6_CLOUD_STACK_ID);
   }
+  if (options.mode === "cloud" && !environmentConfig.cloud?.loadZone) {
+    throw new Error("Falta configurar cloud.loadZone para una ejecución cloud.");
+  }
 
   const resultsPath = path.join(rootDir, "results");
   const { runId, resultDir } = await reserveRunDirectory({ requestedRunId: options.runId, resultsPath });
@@ -273,6 +305,8 @@ export async function main(args = process.argv.slice(2)) {
     testName: options.testName,
     runId,
     baseUrl,
+    cloudLoadZone: environmentConfig.cloud.loadZone,
+    safeSummaryPath: path.join(resultDir, "summary.json"),
   });
   const effectiveConfig = {
     runId,
@@ -283,7 +317,8 @@ export async function main(args = process.argv.slice(2)) {
       baseUrl,
       expectedContext: environmentConfig.expectedContext,
       requestTimeout: environmentConfig.requestTimeout || "30s",
-      sessionPolicy: environmentConfig.sessionPolicy || "per-iteration",
+      sessionPolicy: environmentConfig.sessionPolicy,
+      ...(environmentConfig.cloud ? { cloud: environmentConfig.cloud } : {}),
     },
   };
   const paths = {

@@ -2,7 +2,7 @@
   "version": 1,
   "profile": "session-sharing-comparison",
   "executor": "per-vu-iterations",
-  "vus": 50,
+  "vus": 2,
   "iterationsPerVu": 2,
   "typeByIteration": [3, 1],
   "pauseSeconds": 3,

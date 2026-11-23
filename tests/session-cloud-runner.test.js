@@ -39,6 +39,14 @@ test("local command keeps the safe custom summary on the local filesystem", () =
   assert.equal(invocation.environment.EXPERIMENT_SUMMARY_PATH, "results/test/summary.json");
 });
 
+test("session experiment is restored to the agreed 2-VU offline/cloud profile", () => {
+  const profile = JSON.parse(readFileSync("experiments/session-comparison.json", "utf8"));
+  assert.equal(profile.vus, 2);
+  assert.equal(profile.iterationsPerVu, 2);
+  assert.deepEqual(profile.typeByIteration, [3, 1]);
+  assert.equal(profile.cloud.loadZone, "amazon:us:ashburn");
+});
+
 test("k6 inspects the cloud experiment without running setup or sending load", () => {
   const result = spawnSync("k6", ["inspect", "--env", "FINANCIERO_USER=offline-user",
     "--env", "FINANCIERO_PASSWORD=offline-password", "--env", "EXECUTION_MODE=cloud",

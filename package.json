@@ -7,6 +7,7 @@
     "test": "node --test tests/*.test.js",
     "test:local": "node run.js --mode local",
     "test:hybrid": "node run.js --mode hybrid",
-    "test:cloud": "node run.js --mode cloud"
+    "test:cloud": "node run.js --mode cloud",
+    "experiment:session": "node experiments/run-session-comparison.js"
   }
 }

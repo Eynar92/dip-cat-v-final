@@ -141,21 +141,21 @@ function twoLinePersistedVoucher({ headerGlosa = "G-V1", detailGlosa = "G-V1", i
   const secondRow = includeSecondLine
     ? `<input name="debe2" value="0.00"><input name="haber2" value="10.00">
        <input name="glosa_detalle2" value="${detailGlosa}">
-       <script>setBusquedaCuentaEdit(13291,5102200002,"GASTO EN IMPRENTA",1,1)</script>`
+       <script>filaActiva=2;setBusquedaCuentaEdit(13291,5102200002,"GASTO EN IMPRENTA",1,1)</script>`
     : "";
   return `<select name="tipo_comprobante"><option value="1" selected>Ingreso</option></select>
     <input name="fecha" value="2026-09-01"><input name="glosa" value="${headerGlosa}">
     <input name="nro_correlativo" value="15">
     <input name="debe1" value="10.00"><input name="haber1" value="0.00">
     <input name="glosa_detalle1" value="${detailGlosa}">
-    <script>setBusquedaCuentaEdit(13004,1101010001,"CAJA M/N",1,1)</script>
+    <script>filaActiva=1;setBusquedaCuentaEdit(13004,1101010001,"CAJA M/N",1,1)</script>
     ${secondRow}
     <input name="totaldeb" value="${totalDebit}"><input name="totalhab" value="${totalCredit}">`;
 }
 
 const expectedPersisted = {
-  data: { type: 1, lines: [{ accountNumber: "1101010001", debit: 10, credit: 0 },
-    { accountNumber: "5102200002", debit: 0, credit: 10 }] },
+  data: { type: 1, lines: [{ accountNumber: "1101010001", accountName: "CAJA M/N", debit: 10, credit: 0 },
+    { accountNumber: "5102200002", accountName: "GASTO EN IMPRENTA", debit: 0, credit: 10 }] },
   id: "18370",
   glosa: "G-V1",
   date: "2026-09-01",

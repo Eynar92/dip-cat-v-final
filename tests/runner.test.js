@@ -2,6 +2,8 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -14,6 +16,8 @@ import {
   resolveRunId,
   reserveRunDirectory,
   runProcess,
+  resolveSessionPolicy,
+  validateCloudLoadZone,
 } from "../run.js";
 import { buildScenario, validateTestCatalog } from "../config/test-config.js";
 
@@ -46,6 +50,22 @@ test("test catalog validates all six named tests and explicit executor settings"
   }
 });
 
+test("k6 inspects all six profiles without starting an execution", () => {
+  const catalog = JSON.parse(readFileSync("config/tests.json", "utf8"));
+  for (const name of names) {
+    const result = spawnSync("k6", ["inspect", "--env", "FINANCIERO_USER=offline-user",
+      "--env", "FINANCIERO_PASSWORD=offline-password", "--env", "EXECUTION_MODE=local",
+      "--env", `TEST_NAME=${name}`, "--env", "RUN_ID=offline123",
+      "src/main.js"], { encoding: "utf8", windowsHide: true });
+    assert.equal(result.status, 0, `${name}: ${result.stderr}`);
+    const options = JSON.parse(result.stdout);
+    const profile = catalog.tests[name];
+    assert.equal(options.scenarios.comprobantes.executor, profile.executor);
+    assert.equal(options.thresholds.voucher_business_success[0], "rate==1");
+    assert.equal(options.noCookiesReset, true, "la política shared predeterminada conserva la sesión del VU");
+  }
+});
+
 test("CLI parsing selects each mode and preserves the named test", () => {
   for (const mode of ["local", "hybrid", "cloud"]) {
     assert.deepEqual(parseArgs(["--mode", mode, "--test", "baseline"]), {
@@ -56,6 +76,28 @@ test("CLI parsing selects each mode and preserves the named test", () => {
     });
   }
   assert.equal(parseArgs(["--mode", "local", "--test", "smoke", "--run-id", "manual123"]).runId, "manual123");
+});
+
+test("session policy defaults to shared and rejects values outside the three supported strategies", () => {
+  assert.equal(resolveSessionPolicy("shared"), "shared");
+  assert.equal(resolveSessionPolicy("per-vu"), "per-vu");
+  assert.equal(resolveSessionPolicy("per-iteration"), "per-iteration");
+  assert.equal(resolveSessionPolicy(undefined), "shared");
+  assert.throws(() => resolveSessionPolicy("invalid"), /per-iteration, per-vu, shared/);
+});
+
+test("cloud load zone accepts provider:region:zone and rejects malformed values", () => {
+  assert.equal(validateCloudLoadZone("amazon:us:ashburn"), "amazon:us:ashburn");
+  assert.equal(validateCloudLoadZone(undefined), undefined);
+  for (const value of ["ashburn", "amazon:us", "amazon:us:ashburn:extra", 123]) {
+    assert.throws(() => validateCloudLoadZone(value), /proveedor:región:zona/);
+  }
+});
+
+test("project defaults to shared while retaining cloud load zone in environment configuration", async () => {
+  const config = JSON.parse(await readFile(new URL("../config/environment.json", import.meta.url), "utf8"));
+  assert.equal(config.sessionPolicy, "shared");
+  assert.equal(config.cloud.loadZone, "amazon:us:ashburn");
 });
 
 test("generated run IDs are valid and differ across invocations", () => {
@@ -123,6 +165,44 @@ test("child environment receives the selected invocation values without printing
   assert.equal(childEnvironment.RUN_ID, "test123");
   assert.equal(childEnvironment.FINANCIERO_USER, "user-placeholder");
   assert.equal(childEnvironment.FINANCIERO_PASSWORD, "password-placeholder");
+});
+
+test("only cloud mode forwards the configured load zone to k6", () => {
+  const cloudEnvironment = buildChildEnvironment({
+    parentEnvironment: { K6_CLOUD_LOAD_ZONE: "stale:region:zone" },
+    mode: "cloud", testName: "smoke", runId: "cloud123", baseUrl: "https://example.invalid/",
+    cloudLoadZone: "amazon:us:ashburn",
+    safeSummaryPath: "results/cloud123/summary.json",
+  });
+  assert.equal(cloudEnvironment.K6_CLOUD_LOAD_ZONE, "amazon:us:ashburn");
+  assert.equal(cloudEnvironment.K6_SAFE_SUMMARY_PATH, undefined);
+  const cloud = buildK6Invocation({ mode: "cloud", testName: "smoke", runId: "cloud123",
+    environment: cloudEnvironment, resultDir: "results/cloud123" });
+  assert.ok(cloud.args.includes("K6_CLOUD_LOAD_ZONE=amazon:us:ashburn"));
+  assert.equal(cloud.args.some((value) => value.includes("results/cloud123")), false);
+  assert.equal(cloud.args.includes("--summary-export"), false);
+
+  const hybridEnvironment = buildChildEnvironment({
+    parentEnvironment: { K6_CLOUD_LOAD_ZONE: "stale:region:zone" },
+    mode: "hybrid", testName: "smoke", runId: "hybrid123", baseUrl: "https://example.invalid/",
+    cloudLoadZone: "amazon:us:ashburn",
+    safeSummaryPath: "results/hybrid123/summary.json",
+  });
+  assert.equal(hybridEnvironment.K6_CLOUD_LOAD_ZONE, undefined);
+  assert.equal(hybridEnvironment.K6_SAFE_SUMMARY_PATH, "results/hybrid123/summary.json");
+  const hybrid = buildK6Invocation({ mode: "hybrid", testName: "smoke", runId: "hybrid123",
+    environment: hybridEnvironment, resultDir: "results/hybrid123" });
+  assert.ok(hybrid.args.includes("--local-execution"));
+  assert.equal(hybrid.args.includes("--summary-export"), false);
+
+  const localEnvironment = buildChildEnvironment({
+    parentEnvironment: {}, mode: "local", testName: "smoke", runId: "local123",
+    baseUrl: "https://example.invalid/", safeSummaryPath: "results/local123/summary.json",
+  });
+  assert.equal(localEnvironment.K6_SAFE_SUMMARY_PATH, "results/local123/summary.json");
+  const local = buildK6Invocation({ mode: "local", testName: "smoke", runId: "local123",
+    environment: localEnvironment, resultDir: "results/local123" });
+  assert.equal(local.args.includes("--summary-export"), false);
 });
 
 test("invocation exposes separate arguments and unique result destinations", () => {

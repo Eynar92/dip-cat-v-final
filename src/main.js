@@ -6,8 +6,13 @@ import { loadConfig } from "./config.js";
 import { buildScenario } from "../config/test-config.js";
 import { flowFailureRate, recordOperation, businessSuccess } from "./metrics.js";
 import { createVoucher } from "./voucher-flow.js";
+import { acquireSession, invalidateSession, prepareSession } from "./session-policy.js";
+import { withoutSetupData, writeSafeSummary } from "./session-summary.js";
 
 const cfg = loadConfig();
+if (cfg.mode === "cloud" && !cfg.cloud.loadZone) {
+  throw new Error("Define una zona cloud válida en cloud.loadZone o K6_CLOUD_LOAD_ZONE.");
+}
 const test = cfg.testConfig;
 const vouchers = new SharedArray("datos comprobantes", () => JSON.parse(open("../data/vouchers.json")));
 const scenarioOptions = buildScenario(test);
@@ -26,15 +31,29 @@ for (const type of test.types) {
 export const options = {
   scenarios: { comprobantes: scenarioOptions },
   thresholds: test.thresholds,
+  noCookiesReset: ["per-vu", "shared"].includes(cfg.sessionPolicy),
   userAgent: "dip-cat-v-final/k6",
+  ...(cfg.mode === "cloud" ? { cloud: {
+    distribution: { [cfg.cloud.loadZone]: { loadZone: cfg.cloud.loadZone, percent: 100 } },
+  } } : {}),
 };
 
-function errorMessage(error) {
-  if (error && typeof error.message === "string") return error.message.slice(0, 500);
-  return String(error || "Error sin detalle.").slice(0, 500);
+export function setup() {
+  try {
+    return prepareSession({ http, cfg, check, recordOperation });
+  } catch {
+    return { ok: false, stage: "session-preparation", reason: "No se pudo preparar la sesión compartida." };
+  }
 }
 
-export function runVoucher() {
+export function handleSummary(summary) {
+  if (cfg.mode === "cloud") return {};
+  const destination = __ENV.K6_SAFE_SUMMARY_PATH;
+  if (destination) return writeSafeSummary(summary, destination);
+  return { stdout: `${JSON.stringify(withoutSetupData(summary), null, 2)}\n` };
+}
+
+export function runVoucher(setupData) {
   const iterationIndex = execution.vu.iterationInScenario;
   const type = test.types[iterationIndex % test.types.length];
   const data = vouchers.find((voucher) => voucher.type === type);
@@ -58,10 +77,26 @@ export function runVoucher() {
     result.event = { status: "failed", stage: "glosa-validation", error: "La glosa supera los 44 caracteres validados." };
   } else {
     try {
-      result = group(`comprobante:${data.name}`, () => createVoucher({
+      const sessionContext = { http, cfg, check, vu, iteration, recordOperation };
+      let acquired;
+      try {
+        acquired = acquireSession(sessionContext, setupData);
+      } catch {
+        acquired = { ok: false, stage: "session", reason: "No se pudo preparar o instalar la sesión." };
+      }
+      if (!acquired.ok) {
+        result = { ok: false, event: {
+          status: "failed-before-save",
+          stage: acquired.stage || "authentication",
+          error: { name: "SessionError", message: acquired.reason || "No se pudo obtener una sesión autenticada." },
+        } };
+      } else {
+        const session = acquired.session;
+        result = group(`comprobante:${data.name}`, () => createVoucher({
         http,
         check,
         cfg,
+        session,
         data,
         glosa,
         vu,
@@ -69,9 +104,12 @@ export function runVoucher() {
         scenario: test.scenarioCode,
         recordOperation,
         businessSuccess,
-      }));
-    } catch (error) {
-      result = { ok: false, event: { status: "failed", stage: "flow-exception", error: errorMessage(error) } };
+        onSessionInvalidResponse: (_response, currentSession) => invalidateSession(vu, currentSession),
+        }));
+      }
+    } catch {
+      result = { ok: false, event: { status: "failed-before-save", stage: "flow-exception",
+        error: { name: "Error", message: "Error inesperado en el flujo; no se guardaron detalles técnicos." } } };
     }
   }
 

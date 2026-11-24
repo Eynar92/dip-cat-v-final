@@ -14,7 +14,8 @@
         "http_req_failed": ["rate==0"],
         "checks": ["rate==1"],
         "voucher_business_success": ["rate==1"],
-        "voucher_flow_failure_rate": ["rate==0"]
+        "voucher_flow_failure_rate": ["rate==0"],
+        "http_req_duration": ["p(95)<3000"]
       }
     },
     "concurrency-validation": {
